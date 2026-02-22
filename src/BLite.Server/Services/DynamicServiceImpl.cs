@@ -28,18 +28,18 @@ public sealed class DynamicServiceImpl : DynamicService.DynamicServiceBase
 
     // ── Insert ────────────────────────────────────────────────────────────────
 
-    public override Task<InsertResponse> Insert(InsertRequest request, ServerCallContext context)
+    public override async Task<InsertResponse> Insert(InsertRequest request, ServerCallContext context)
     {
         try
         {
             var doc = BsonPayloadSerializer.Deserialize(request.BsonPayload.ToByteArray());
-            var id  = _engine.Insert(request.Collection, doc);
-            return Task.FromResult(new InsertResponse { Id = BsonIdSerializer.ToProto(id) });
+            var id  = await _engine.InsertAsync(request.Collection, doc, context.CancellationToken);
+            return new InsertResponse { Id = BsonIdSerializer.ToProto(id) };
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Insert failed on collection {Col}", request.Collection);
-            return Task.FromResult(new InsertResponse { Error = ex.Message });
+            return new InsertResponse { Error = ex.Message };
         }
     }
 
@@ -142,8 +142,8 @@ public sealed class DynamicServiceImpl : DynamicService.DynamicServiceBase
 
     // ── InsertBulk ────────────────────────────────────────────────────────────
 
-    public override Task<BulkInsertResponse> InsertBulk(BulkInsertRequest request,
-                                                          ServerCallContext context)
+    public override async Task<BulkInsertResponse> InsertBulk(BulkInsertRequest request,
+                                                               ServerCallContext context)
     {
         try
         {
@@ -151,16 +151,16 @@ public sealed class DynamicServiceImpl : DynamicService.DynamicServiceBase
                 .Select(p => BsonPayloadSerializer.Deserialize(p.ToByteArray()))
                 .ToList();
 
-            var ids = _engine.InsertBulk(request.Collection, docs);
-
+            var ids = await _engine.InsertBulkAsync(request.Collection, docs,
+                                                    context.CancellationToken);
             var response = new BulkInsertResponse();
             response.Ids.AddRange(ids.Select(BsonIdSerializer.ToProto));
-            return Task.FromResult(response);
+            return response;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "InsertBulk failed on collection {Col}", request.Collection);
-            return Task.FromResult(new BulkInsertResponse { Error = ex.Message });
+            return new BulkInsertResponse { Error = ex.Message };
         }
     }
 

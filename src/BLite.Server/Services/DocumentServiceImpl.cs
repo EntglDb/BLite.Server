@@ -66,19 +66,19 @@ public sealed class DocumentServiceImpl : DocumentService.DocumentServiceBase
 
     // ── Typed insert ─────────────────────────────────────────────────────────
 
-    public override Task<InsertResponse> Insert(TypedInsertRequest request,
-                                                 ServerCallContext context)
+    public override async Task<InsertResponse> Insert(TypedInsertRequest request,
+                                                      ServerCallContext context)
     {
         try
         {
             var doc = BsonPayloadSerializer.Deserialize(request.BsonPayload.ToByteArray());
-            var id  = _engine.Insert(request.Collection, doc);
-            return Task.FromResult(new InsertResponse { Id = BsonIdSerializer.ToProto(id) });
+            var id  = await _engine.InsertAsync(request.Collection, doc, context.CancellationToken);
+            return new InsertResponse { Id = BsonIdSerializer.ToProto(id) };
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Typed Insert failed on collection {Col}", request.Collection);
-            return Task.FromResult(new InsertResponse { Error = ex.Message });
+            return new InsertResponse { Error = ex.Message };
         }
     }
 
@@ -104,19 +104,19 @@ public sealed class DocumentServiceImpl : DocumentService.DocumentServiceBase
 
     // ── Typed delete ─────────────────────────────────────────────────────────
 
-    public override Task<MutationResponse> Delete(DeleteRequest request,
-                                                   ServerCallContext context)
+    public override async Task<MutationResponse> Delete(DeleteRequest request,
+                                                        ServerCallContext context)
     {
         try
         {
             var id = BsonIdSerializer.FromProto(request.Id);
-            var ok = _engine.Delete(request.Collection, id.ToString()!);
-            return Task.FromResult(new MutationResponse { Success = ok });
+            var ok = await _engine.DeleteAsync(request.Collection, id, context.CancellationToken);
+            return new MutationResponse { Success = ok };
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Typed Delete failed on collection {Col}", request.Collection);
-            return Task.FromResult(new MutationResponse { Success = false, Error = ex.Message });
+            return new MutationResponse { Success = false, Error = ex.Message };
         }
     }
 
