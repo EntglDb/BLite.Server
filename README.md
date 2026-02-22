@@ -109,10 +109,10 @@ service DocumentService {
 
 ```bash
 # Run the server
-dotnet run --project src/BLite.Server -- --db /data/mydb.db --port 5050
+dotnet run --project src/BLite.Server -- --db /data/mydb.db --port 2626
 
 # Connect from a client
-var client = new BLiteRemoteClient("https://localhost:5050");
+var client = new BLiteRemoteClient("https://localhost:2626");
 var users  = client.GetCollection<User>("users");
 
 var result = await users.AsQueryable()
