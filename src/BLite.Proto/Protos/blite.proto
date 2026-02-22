@@ -64,8 +64,9 @@ message BsonIdBytes {
 // ─── DynamicService request/response messages ─────────────────────────────────
 
 message InsertRequest {
-  string     collection    = 1;
-  bytes      bson_payload  = 2;  // BsonDocument serialized to raw BSON bytes
+  string     collection      = 1;
+  bytes      bson_payload    = 2;  // BsonDocument serialized to raw BSON bytes
+  string     transaction_id  = 3;  // optional — empty = auto-commit
 }
 
 message InsertResponse {
@@ -74,14 +75,16 @@ message InsertResponse {
 }
 
 message UpdateRequest {
-  string      collection   = 1;
-  BsonIdBytes id           = 2;
-  bytes       bson_payload = 3;
+  string      collection      = 1;
+  BsonIdBytes id              = 2;
+  bytes       bson_payload    = 3;
+  string      transaction_id  = 4;  // optional — empty = auto-commit
 }
 
 message DeleteRequest {
-  string      collection = 1;
-  BsonIdBytes id         = 2;
+  string      collection      = 1;
+  BsonIdBytes id              = 2;
+  string      transaction_id  = 3;  // optional — empty = auto-commit
 }
 
 message MutationResponse {
@@ -107,8 +110,9 @@ message QueryRequest {
 }
 
 message BulkInsertRequest {
-  string         collection = 1;
-  repeated bytes payloads   = 2;
+  string         collection      = 1;
+  repeated bytes payloads        = 2;
+  string         transaction_id  = 3;  // optional
 }
 
 message BulkInsertResponse {
@@ -117,8 +121,9 @@ message BulkInsertResponse {
 }
 
 message BulkUpdateRequest {
-  string                  collection = 1;
-  repeated BulkUpdateItem items      = 2;
+  string                  collection      = 1;
+  repeated BulkUpdateItem items           = 2;
+  string                  transaction_id  = 3;  // optional
 }
 
 message BulkUpdateItem {
@@ -127,8 +132,9 @@ message BulkUpdateItem {
 }
 
 message BulkDeleteRequest {
-  string              collection = 1;
-  repeated BsonIdBytes ids       = 2;
+  string               collection      = 1;
+  repeated BsonIdBytes ids             = 2;
+  string               transaction_id  = 3;  // optional
 }
 
 message BulkMutationResponse {
@@ -154,22 +160,25 @@ message TypedDocumentResponse {
 }
 
 message TypedInsertRequest {
-  string collection   = 1;
-  bytes  bson_payload = 2;  // T serialized via BLite mapper
-  string type_name    = 3;
+  string collection      = 1;
+  bytes  bson_payload    = 2;  // T serialized via BLite mapper
+  string type_name       = 3;
+  string transaction_id  = 4;  // optional
 }
 
 message TypedUpdateRequest {
-  string      collection   = 1;
-  BsonIdBytes id           = 2;
-  bytes       bson_payload = 3;
-  string      type_name    = 4;
+  string      collection      = 1;
+  BsonIdBytes id              = 2;
+  bytes       bson_payload    = 3;
+  string      type_name       = 4;
+  string      transaction_id  = 5;  // optional
 }
 
 message TypedBulkInsertRequest {
-  string         collection = 1;
-  string         type_name  = 2;
-  repeated bytes payloads   = 3;
+  string         collection      = 1;
+  string         type_name       = 2;
+  repeated bytes payloads        = 3;
+  string         transaction_id  = 4;  // optional
 }
 
 // ─── AdminService ─────────────────────────────────────────────────────────────
@@ -226,4 +235,29 @@ message ListUsersResponse {
 message UpdatePermsRequest {
   string                  username    = 1;
   repeated UserPermission permissions = 2;
+}
+
+// ─── TransactionService ───────────────────────────────────────────────────────
+// Explicit transaction control.  Begin acquires a server-side transaction;
+// all write RPCs that carry the returned transaction_id participate in it.
+// The transaction is automatically rolled back after the configured timeout
+// (default 60 s, see Transactions:TimeoutSeconds in appsettings).
+
+service TransactionService {
+  rpc Begin    (BeginTransactionRequest)  returns (BeginTransactionResponse);
+  rpc Commit   (TransactionRequest)       returns (MutationResponse);
+  rpc Rollback (TransactionRequest)       returns (MutationResponse);
+}
+
+// ─── TransactionService messages ─────────────────────────────────────────────
+
+message BeginTransactionRequest {}
+
+message BeginTransactionResponse {
+  string transaction_id = 1;  // UUID — pass in subsequent write requests
+  string error          = 2;
+}
+
+message TransactionRequest {
+  string transaction_id = 1;
 }

@@ -6,6 +6,11 @@
 using BLite.Core;
 using BLite.Server.Auth;
 using BLite.Server.Services;
+using BLite.Server.Telemetry;
+using BLite.Server.Transactions;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
+using OpenTelemetry.Metrics;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -13,6 +18,9 @@ var builder = WebApplication.CreateBuilder(args);
 var serverConfig = builder.Configuration.GetSection("BLiteServer");
 var dbPath       = serverConfig.GetValue<string>("DatabasePath") ?? "blite.db";
 var rootKey      = builder.Configuration.GetValue<string>("Auth:RootKey");
+var otlpEndpoint = builder.Configuration.GetValue<string>("Telemetry:Otlp:Endpoint");
+var telemetryOn  = builder.Configuration.GetValue<bool?>("Telemetry:Enabled") ?? true;
+var consoleTelem = builder.Configuration.GetValue<bool?>("Telemetry:Console") ?? builder.Environment.IsDevelopment();
 
 // ── Services ──────────────────────────────────────────────────────────────────
 
@@ -24,9 +32,41 @@ builder.Services.AddSingleton<UserRepository>();
 builder.Services.AddSingleton<ApiKeyValidator>();
 builder.Services.AddSingleton<AuthorizationService>();
 
+// Transactions
+builder.Services.Configure<TransactionOptions>(
+    builder.Configuration.GetSection("Transactions"));
+builder.Services.AddSingleton<TransactionManager>();
+builder.Services.AddHostedService<TransactionCleanupService>();
+
+// OpenTelemetry
+if (telemetryOn)
+{
+    var serviceName = builder.Configuration.GetValue<string>("Telemetry:ServiceName") ?? "blite-server";
+    builder.Services.AddOpenTelemetry()
+        .ConfigureResource(r => r.AddService(serviceName))
+        .WithTracing(t =>
+        {
+            t.AddAspNetCoreInstrumentation()
+             .AddSource(BLiteMetrics.ServiceName);
+            if (consoleTelem)  t.AddConsoleExporter();
+            if (!string.IsNullOrWhiteSpace(otlpEndpoint))
+                t.AddOtlpExporter(o => o.Endpoint = new Uri(otlpEndpoint));
+        })
+        .WithMetrics(m =>
+        {
+            m.AddAspNetCoreInstrumentation()
+             .AddRuntimeInstrumentation()
+             .AddMeter(BLiteMetrics.ServiceName);
+            if (consoleTelem)  m.AddConsoleExporter();
+            if (!string.IsNullOrWhiteSpace(otlpEndpoint))
+                m.AddOtlpExporter(o => o.Endpoint = new Uri(otlpEndpoint));
+        });
+}
+
 // gRPC
 builder.Services.AddGrpc(options =>
 {
+    options.Interceptors.Add<TelemetryInterceptor>();
     options.EnableDetailedErrors = builder.Environment.IsDevelopment();
     options.MaxReceiveMessageSize = 16 * 1024 * 1024; // 16 MB
     options.MaxSendMessageSize    = 16 * 1024 * 1024;
@@ -62,6 +102,7 @@ app.UseMiddleware<ApiKeyMiddleware>();
 app.MapGrpcService<DynamicServiceImpl>();
 app.MapGrpcService<DocumentServiceImpl>();
 app.MapGrpcService<AdminServiceImpl>();
+app.MapGrpcService<TransactionServiceImpl>();
 
 app.MapGet("/", () =>
     "BLite Server is running. Use a gRPC client to connect (see blitedb.com/docs).");
