@@ -18,7 +18,9 @@
     <!-- BLite engine (via NuGet — same version as BLite.slnx) -->
     <PackageReference Include="BLite"                   Version="1.5.*" />
     <!-- gRPC host -->
-    <PackageReference Include="Grpc.AspNetCore"         Version="2.68.*" />
+    <PackageReference Include="Grpc.AspNetCore"                    Version="2.68.*" />
+    <!-- gRPC reflection for grpcurl/tooling in Development -->
+    <PackageReference Include="Grpc.AspNetCore.Server.Reflection"  Version="2.68.*" />
     <!-- MessagePack for QueryDescriptor deserialization -->
     <PackageReference Include="MessagePack"             Version="3.1.*" />
   </ItemGroup>

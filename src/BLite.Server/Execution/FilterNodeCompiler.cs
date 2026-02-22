@@ -123,10 +123,25 @@ public static class FilterNodeCompiler
         foreach (var part in parts)
         {
             if (current is BsonDocument d)
-                current = d.TryGet(part, out var v) ? v : null;
+                current = d.TryGetValue(part, out var bv) ? BsonValueToObject(bv) : null;
             else
                 return null;
         }
         return current;
     }
+
+    /// <summary>Boxes a <see cref="BsonValue"/> into a CLR object for comparisons.</summary>
+    private static object? BsonValueToObject(BsonValue v) => v.Type switch
+    {
+        BsonType.Null       => null,
+        BsonType.Boolean    => (object)v.AsBoolean,
+        BsonType.Int32      => (object)v.AsInt32,
+        BsonType.Int64      => (object)v.AsInt64,
+        BsonType.Double     => (object)v.AsDouble,
+        BsonType.Decimal128 => (object)v.AsDecimal,
+        BsonType.String     => v.AsString,
+        BsonType.DateTime   => v.AsDateTime,
+        BsonType.Document   => v.AsDocument,   // nested: traversal continues
+        _                   => null
+    };
 }

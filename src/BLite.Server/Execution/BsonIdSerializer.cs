@@ -16,7 +16,7 @@ public static class BsonIdSerializer
         return new BsonIdBytes
         {
             Value   = ByteString.CopyFrom(id.ToBytes()),
-            IdType  = (int)id.IdType
+            IdType  = (int)id.Type
         };
     }
 
