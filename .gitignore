@@ -37,3 +37,5 @@ Thumbs.db
 Desktop.ini
 .DS_Store
 !website/dist
+*.db
+*.wal
