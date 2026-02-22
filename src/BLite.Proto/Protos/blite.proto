@@ -1,0 +1,173 @@
+syntax = "proto3";
+
+package blite.v1;
+
+option csharp_namespace = "BLite.Proto.V1";
+
+// ─── DynamicService ───────────────────────────────────────────────────────────
+// Schema-less path: all documents travel as raw BSON bytes.
+// Use this service when compile-time types are unavailable (scripting, migrations,
+// server-side processing, cross-language clients).
+
+service DynamicService {
+  // Single-document writes
+  rpc Insert      (InsertRequest)       returns (InsertResponse);
+  rpc Update      (UpdateRequest)       returns (MutationResponse);
+  rpc Delete      (DeleteRequest)       returns (MutationResponse);
+
+  // Single-document read
+  rpc FindById    (FindByIdRequest)     returns (DocumentResponse);
+
+  // Streaming query — server streams matching documents back one by one.
+  // query_descriptor carries the QueryDescriptor (MessagePack-encoded).
+  rpc Query       (QueryRequest)        returns (stream DocumentResponse);
+
+  // Bulk operations (single WAL transaction per call)
+  rpc InsertBulk  (BulkInsertRequest)   returns (BulkInsertResponse);
+  rpc UpdateBulk  (BulkUpdateRequest)   returns (BulkMutationResponse);
+  rpc DeleteBulk  (BulkDeleteRequest)   returns (BulkMutationResponse);
+
+  // Collection management
+  rpc ListCollections  (Empty)                    returns (CollectionListResponse);
+  rpc DropCollection   (DropCollectionRequest)    returns (MutationResponse);
+}
+
+// ─── DocumentService ─────────────────────────────────────────────────────────
+// Typed path: client sends a QueryDescriptor that encodes the SELECT projection
+// and optional WHERE predicate.  The server executes a push-down BSON scan
+// (T is never instantiated server-side) and streams raw projected bytes back.
+
+service DocumentService {
+  // Streaming typed query
+  rpc Query       (QueryRequest)          returns (stream TypedDocumentResponse);
+
+  // Write operations — payload is serialized T (BSON bytes produced by BLite mappers)
+  rpc Insert      (TypedInsertRequest)    returns (InsertResponse);
+  rpc Update      (TypedUpdateRequest)    returns (MutationResponse);
+  rpc Delete      (DeleteRequest)         returns (MutationResponse);
+
+  // Bulk typed writes
+  rpc InsertBulk  (TypedBulkInsertRequest) returns (BulkInsertResponse);
+}
+
+// ─── Shared messages ─────────────────────────────────────────────────────────
+
+message Empty {}
+
+// Opaque document identifier.  Sent as raw bytes so that ObjectId, string,
+// int32, int64, and Guid IDs are all handled uniformly.
+message BsonIdBytes {
+  bytes  value    = 1;
+  int32  id_type  = 2;  // maps to BLite.Bson.BsonIdType enum
+}
+
+// ─── DynamicService request/response messages ─────────────────────────────────
+
+message InsertRequest {
+  string     collection    = 1;
+  bytes      bson_payload  = 2;  // BsonDocument serialized to raw BSON bytes
+}
+
+message InsertResponse {
+  BsonIdBytes id     = 1;
+  string      error  = 2;
+}
+
+message UpdateRequest {
+  string      collection   = 1;
+  BsonIdBytes id           = 2;
+  bytes       bson_payload = 3;
+}
+
+message DeleteRequest {
+  string      collection = 1;
+  BsonIdBytes id         = 2;
+}
+
+message MutationResponse {
+  bool   success = 1;
+  string error   = 2;
+}
+
+message FindByIdRequest {
+  string      collection = 1;
+  BsonIdBytes id         = 2;
+}
+
+message DocumentResponse {
+  bytes  bson_payload = 1;  // raw BSON bytes; empty when not found
+  bool   found        = 2;
+  string error        = 3;
+}
+
+// QueryRequest is shared between DynamicService and DocumentService.
+// query_descriptor is a MessagePack-encoded QueryDescriptor.
+message QueryRequest {
+  bytes query_descriptor = 1;
+}
+
+message BulkInsertRequest {
+  string         collection = 1;
+  repeated bytes payloads   = 2;
+}
+
+message BulkInsertResponse {
+  repeated BsonIdBytes ids   = 1;
+  string               error = 2;
+}
+
+message BulkUpdateRequest {
+  string                  collection = 1;
+  repeated BulkUpdateItem items      = 2;
+}
+
+message BulkUpdateItem {
+  BsonIdBytes id           = 1;
+  bytes       bson_payload = 2;
+}
+
+message BulkDeleteRequest {
+  string              collection = 1;
+  repeated BsonIdBytes ids       = 2;
+}
+
+message BulkMutationResponse {
+  int32  affected_count = 1;
+  string error          = 2;
+}
+
+message CollectionListResponse {
+  repeated string names = 1;
+}
+
+message DropCollectionRequest {
+  string collection = 1;
+}
+
+// ─── DocumentService request/response messages ────────────────────────────────
+
+// TypedDocumentResponse carries projected bytes (the SELECT result, not full T).
+message TypedDocumentResponse {
+  bytes  bson_payload  = 1;
+  string type_name     = 2;  // hint for client-side deserialization
+  string error         = 3;
+}
+
+message TypedInsertRequest {
+  string collection   = 1;
+  bytes  bson_payload = 2;  // T serialized via BLite mapper
+  string type_name    = 3;
+}
+
+message TypedUpdateRequest {
+  string      collection   = 1;
+  BsonIdBytes id           = 2;
+  bytes       bson_payload = 3;
+  string      type_name    = 4;
+}
+
+message TypedBulkInsertRequest {
+  string         collection = 1;
+  string         type_name  = 2;
+  repeated bytes payloads   = 3;
+}

@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RootNamespace>BLite.Proto</RootNamespace>
+    <AssemblyName>BLite.Proto</AssemblyName>
+  </PropertyGroup>
+
+  <!-- protoc + gRPC codegen -->
+  <ItemGroup>
+    <Protobuf Include="Protos\blite.proto" GrpcServices="Both" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Google.Protobuf"          Version="3.29.*" />
+    <PackageReference Include="Grpc.Core.Api"            Version="2.68.*" />
+    <PackageReference Include="Grpc.Tools"               Version="2.68.*" PrivateAssets="All" />
+    <PackageReference Include="MessagePack"              Version="3.1.*" />
+    <PackageReference Include="MessagePack.Annotations" Version="3.1.*" />
+  </ItemGroup>
+
+</Project>

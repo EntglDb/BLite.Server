@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RootNamespace>BLite.Server</RootNamespace>
+    <AssemblyName>BLite.Server</AssemblyName>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\BLite.Proto\BLite.Proto.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- BLite engine (via NuGet — same version as BLite.slnx) -->
+    <PackageReference Include="BLite"                   Version="1.5.*" />
+    <!-- gRPC host -->
+    <PackageReference Include="Grpc.AspNetCore"         Version="2.68.*" />
+    <!-- MessagePack for QueryDescriptor deserialization -->
+    <PackageReference Include="MessagePack"             Version="3.1.*" />
+  </ItemGroup>
+
+</Project>

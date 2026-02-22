@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="src/BLite.Proto/BLite.Proto.csproj" />
+  <Project Path="src/BLite.Server/BLite.Server.csproj" />
+</Solution>
