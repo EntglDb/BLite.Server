@@ -1,4 +1,7 @@
 <Solution>
   <Project Path="src/BLite.Proto/BLite.Proto.csproj" />
   <Project Path="src/BLite.Server/BLite.Server.csproj" />
+  <Project Path="../BLite/src/BLite/BLite.csproj" />
+  <Project Path="../BLite/src/BLite.Core/BLite.Core.csproj" />
+  <Project Path="../BLite/src/BLite.Bson/BLite.Bson.csproj" />
 </Solution>

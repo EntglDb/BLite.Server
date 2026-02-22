@@ -12,11 +12,11 @@
 
   <ItemGroup>
     <ProjectReference Include="..\BLite.Proto\BLite.Proto.csproj" />
+    <!-- BLite engine — direct project reference (local workspace) -->
+    <ProjectReference Include="..\..\..\BLite\src\BLite\BLite.csproj" />
   </ItemGroup>
 
   <ItemGroup>
-    <!-- BLite engine (via NuGet — same version as BLite.slnx) -->
-    <PackageReference Include="BLite"                   Version="1.5.*" />
     <!-- gRPC host -->
     <PackageReference Include="Grpc.AspNetCore"                    Version="2.68.*" />
     <!-- gRPC reflection for grpcurl/tooling in Development -->

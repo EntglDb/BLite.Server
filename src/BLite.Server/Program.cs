@@ -101,6 +101,7 @@ app.UseMiddleware<ApiKeyMiddleware>();
 // gRPC service endpoints
 app.MapGrpcService<DynamicServiceImpl>();
 app.MapGrpcService<DocumentServiceImpl>();
+app.MapGrpcService<MetadataServiceImpl>();
 app.MapGrpcService<AdminServiceImpl>();
 app.MapGrpcService<TransactionServiceImpl>();
 

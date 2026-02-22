@@ -181,6 +181,45 @@ message TypedBulkInsertRequest {
   string         transaction_id  = 4;  // optional
 }
 
+// ─── MetadataService ──────────────────────────────────────────────────────────
+// Key-map negotiation between client and server.
+// The C-BSON format encodes field names as 2-byte ushort IDs whose mapping is
+// stored persistently in the global StorageEngine dictionary.
+// Clients MUST synchronise their local key map with the server before sending
+// typed payloads, so that predicate push-down works correctly.
+
+service MetadataService {
+  // Ensures every field name in the request is registered in the global
+  // dictionary, then returns the assigned ID for each requested key.
+  // Use this before inserting typed documents so that the client's local map
+  // matches the server's assignments exactly.
+  // Requires Insert (Write) permission on the specified collection.
+  rpc RegisterKeys (RegisterKeysRequest) returns (KeyMapResponse);
+
+  // Returns the full global key→id map (all keys known to the server).
+  // Useful on reconnect or when the client needs to refresh a stale cache.
+  // Requires Query (Read) permission on the specified collection.
+  rpc GetKeyMap    (KeyMapRequest)       returns (KeyMapResponse);
+}
+
+// ─── MetadataService messages ─────────────────────────────────────────────────
+
+message KeyMapRequest {
+  string collection = 1;  // permission check anchor — the collection the caller is working with
+}
+
+message RegisterKeysRequest {
+  string          collection = 1;  // permission check anchor
+  repeated string keys       = 2;  // field names to register (mapper.UsedKeys)
+}
+
+// Carries a subset (RegisterKeys) or the full (GetKeyMap) global dictionary.
+// entries: field_name → ushort id (fits in uint32; values are always ≤ 65535).
+message KeyMapResponse {
+  map<string, uint32> entries = 1;
+  string              error   = 2;
+}
+
 // ─── AdminService ─────────────────────────────────────────────────────────────
 // User and permission management.  All RPCs require a caller with Admin permission.
 
