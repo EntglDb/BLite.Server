@@ -1,22 +1,33 @@
 // BLite.Server — API Key authentication
 // Copyright (C) 2026 Luca Fabbri — AGPL-3.0
+//
+// Delegates lookup to UserRepository.  A valid key must resolve to an Active user.
+// Open/dev mode is still supported: if no users are stored yet all requests are
+// accepted and treated as root.
 
 namespace BLite.Server.Auth;
 
 /// <summary>
-/// Validates incoming API keys against the configured allow-list.
-/// If no keys are configured the server runs in open/dev mode (all requests accepted).
+/// Resolves an API key to its <see cref="BLiteUser"/>, or returns <c>null</c>
+/// when the key is unknown or the user is inactive.
+/// When the repository has no users (first-boot before root is initialized) the server
+/// operates in open/dev mode — every request resolves to a synthetic root user.
 /// </summary>
-public sealed class ApiKeyValidator
+public sealed class ApiKeyValidator(UserRepository users)
 {
-    private readonly HashSet<string> _keys;
+    private static readonly BLiteUser DevRoot = new(
+        Username:    "root",
+        ApiKeyHash:  string.Empty,
+        Namespace:   null,
+        Permissions: [new PermissionEntry("*", BLiteOperation.All)],
+        Active:      true,
+        CreatedAt:   DateTime.UtcNow);
 
-    public ApiKeyValidator(IEnumerable<string> configuredKeys)
+    public BLiteUser? Resolve(string? key)
     {
-        _keys = new HashSet<string>(configuredKeys, StringComparer.Ordinal);
+        // Dev mode: no users stored → treat every call as root.
+        if (users.ListAll().Count == 0) return DevRoot;
+        if (key is null) return null;
+        return users.FindByKey(key);
     }
-
-    /// <summary>Returns <c>true</c> when auth is disabled or the key is valid.</summary>
-    public bool IsValid(string? key)
-        => _keys.Count == 0 || (_keys.Count > 0 && key is not null && _keys.Contains(key));
 }

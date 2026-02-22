@@ -1,42 +1,36 @@
 // BLite.Server — API Key middleware
 // Copyright (C) 2026 Luca Fabbri — AGPL-3.0
+//
+// Reads the x-api-key gRPC metadata header, resolves it to a BLiteUser via
+// ApiKeyValidator, and stores the user in HttpContext.Items[nameof(BLiteUser)].
 
 using Grpc.Core;
 
 namespace BLite.Server.Auth;
 
 /// <summary>
-/// Reads the <c>x-api-key</c> gRPC metadata header and validates it.
-/// Unauthenticated requests receive <see cref="StatusCode.Unauthenticated"/>.
+/// Authenticates every incoming request via the <c>x-api-key</c> header.
+/// On success, the resolved <see cref="BLiteUser"/> is stored in
+/// <c>HttpContext.Items[nameof(BLiteUser)]</c> for downstream services.
 /// </summary>
-public sealed class ApiKeyMiddleware
+public sealed class ApiKeyMiddleware(
+    RequestDelegate next,
+    ApiKeyValidator validator,
+    ILogger<ApiKeyMiddleware> logger)
 {
     private const string HeaderName = "x-api-key";
 
-    private readonly RequestDelegate   _next;
-    private readonly ApiKeyValidator   _validator;
-    private readonly ILogger<ApiKeyMiddleware> _logger;
-
-    public ApiKeyMiddleware(RequestDelegate next, ApiKeyValidator validator,
-                            ILogger<ApiKeyMiddleware> logger)
-    {
-        _next      = next;
-        _validator = validator;
-        _logger    = logger;
-    }
-
     public async Task InvokeAsync(HttpContext context)
     {
-        var key = context.Request.Headers[HeaderName].FirstOrDefault();
+        var key  = context.Request.Headers[HeaderName].FirstOrDefault();
+        var user = validator.Resolve(key);
 
-        if (!_validator.IsValid(key))
+        if (user is null)
         {
-            _logger.LogWarning("Rejected request from {Remote} — invalid API key",
+            logger.LogWarning("Rejected request from {Remote} — invalid or missing API key",
                 context.Connection.RemoteIpAddress);
 
             context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-
-            // For gRPC (HTTP/2) the status must be in trailers
             context.Response.Headers.Append("grpc-status",
                 ((int)StatusCode.Unauthenticated).ToString());
             context.Response.Headers.Append("grpc-message", "Invalid or missing API key");
@@ -44,6 +38,7 @@ public sealed class ApiKeyMiddleware
             return;
         }
 
-        await _next(context);
+        context.Items[nameof(BLiteUser)] = user;
+        await next(context);
     }
 }

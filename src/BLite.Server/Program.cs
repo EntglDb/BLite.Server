@@ -12,12 +12,17 @@ var builder = WebApplication.CreateBuilder(args);
 // ── Configuration ─────────────────────────────────────────────────────────────
 var serverConfig = builder.Configuration.GetSection("BLiteServer");
 var dbPath       = serverConfig.GetValue<string>("DatabasePath") ?? "blite.db";
+var rootKey      = builder.Configuration.GetValue<string>("Auth:RootKey");
 
 // ── Services ──────────────────────────────────────────────────────────────────
 
-// BLiteEngine is the single entry point into the storage kernel.
-// Registered as Singleton — one engine instance per server process.
+// BLiteEngine — single instance, owns the storage kernel
 builder.Services.AddSingleton<BLiteEngine>(_ => new BLiteEngine(dbPath));
+
+// Auth pipeline
+builder.Services.AddSingleton<UserRepository>();
+builder.Services.AddSingleton<ApiKeyValidator>();
+builder.Services.AddSingleton<AuthorizationService>();
 
 // gRPC
 builder.Services.AddGrpc(options =>
@@ -27,31 +32,36 @@ builder.Services.AddGrpc(options =>
     options.MaxSendMessageSize    = 16 * 1024 * 1024;
 });
 
-// API Key authentication middleware
-builder.Services.AddSingleton<ApiKeyValidator>(sp =>
-{
-    var keys = builder.Configuration
-        .GetSection("Auth:ApiKeys")
-        .Get<List<string>>() ?? [];
-    return new ApiKeyValidator(keys);
-});
-
 builder.Services.AddGrpcReflection(); // enable grpcurl introspection in Development
 
 // ── Build & configure pipeline ───────────────────────────────────────────────
 var app = builder.Build();
 
-if (app.Environment.IsDevelopment())
+// ── Bootstrap: load users from DB, ensure root exists ────────────────────────
+var userRepo = app.Services.GetRequiredService<UserRepository>();
+await userRepo.LoadAllAsync();
+
+if (!string.IsNullOrWhiteSpace(rootKey))
 {
-    app.MapGrpcReflectionService();
+    await userRepo.EnsureRootAsync(rootKey);
+    app.Logger.LogInformation("Root user bootstrapped (key from Auth:RootKey).");
+}
+else
+{
+    app.Logger.LogWarning(
+        "Auth:RootKey is not set — server running in open/dev mode (all requests accepted as root).");
 }
 
-// API key check applied to all gRPC endpoints
+if (app.Environment.IsDevelopment())
+    app.MapGrpcReflectionService();
+
+// API key authentication — resolves caller identity for every request
 app.UseMiddleware<ApiKeyMiddleware>();
 
 // gRPC service endpoints
 app.MapGrpcService<DynamicServiceImpl>();
 app.MapGrpcService<DocumentServiceImpl>();
+app.MapGrpcService<AdminServiceImpl>();
 
 app.MapGet("/", () =>
     "BLite Server is running. Use a gRPC client to connect (see blitedb.com/docs).");

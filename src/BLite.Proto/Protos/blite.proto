@@ -171,3 +171,59 @@ message TypedBulkInsertRequest {
   string         type_name  = 2;
   repeated bytes payloads   = 3;
 }
+
+// ─── AdminService ─────────────────────────────────────────────────────────────
+// User and permission management.  All RPCs require a caller with Admin permission.
+
+service AdminService {
+  rpc CreateUser   (CreateUserRequest)        returns (CreateUserResponse);
+  rpc RevokeUser   (UsernameRequest)          returns (MutationResponse);
+  rpc RotateKey    (UsernameRequest)          returns (RotateKeyResponse);
+  rpc ListUsers    (Empty)                    returns (ListUsersResponse);
+  rpc UpdatePerms  (UpdatePermsRequest)       returns (MutationResponse);
+}
+
+// ─── AdminService messages ────────────────────────────────────────────────────
+
+message UserPermission {
+  string collection = 1;  // "*" = wildcard
+  int32  ops        = 2;  // BLiteOperation flags
+}
+
+message CreateUserRequest {
+  string                  username    = 1;
+  string                  namespace   = 2;  // empty = root namespace
+  repeated UserPermission permissions = 3;
+}
+
+message CreateUserResponse {
+  string api_key = 1;  // plaintext key — shown once, never stored
+  string error   = 2;
+}
+
+message UsernameRequest {
+  string username = 1;
+}
+
+message RotateKeyResponse {
+  string api_key = 1;  // new plaintext key
+  string error   = 2;
+}
+
+message UserInfo {
+  string                  username    = 1;
+  string                  namespace   = 2;
+  bool                    active      = 3;
+  string                  created_at  = 4;  // ISO-8601 UTC
+  repeated UserPermission permissions = 5;
+}
+
+message ListUsersResponse {
+  repeated UserInfo users = 1;
+  string            error = 2;
+}
+
+message UpdatePermsRequest {
+  string                  username    = 1;
+  repeated UserPermission permissions = 2;
+}

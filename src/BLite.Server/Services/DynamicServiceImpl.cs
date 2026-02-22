@@ -1,10 +1,11 @@
-// BLite.Server — DynamicService implementation (schema-less path)
-// Copyright (C) 2026 Luca Fabbri — AGPL-3.0
+// BLite.Server � DynamicService implementation (schema-less path)
+// Copyright (C) 2026 Luca Fabbri � AGPL-3.0
 
 using BLite.Bson;
 using BLite.Core;
 using BLite.Proto;
 using BLite.Proto.V1;
+using BLite.Server.Auth;
 using BLite.Server.Execution;
 using Google.Protobuf;
 using Grpc.Core;
@@ -13,45 +14,53 @@ namespace BLite.Server.Services;
 
 /// <summary>
 /// Implements the schema-less gRPC service.
-/// All documents travel as raw BSON bytes — no compile-time type information required.
+/// All documents travel as raw BSON bytes � no compile-time type information required.
+/// Every method checks the caller's permission and applies namespace isolation.
 /// </summary>
 public sealed class DynamicServiceImpl : DynamicService.DynamicServiceBase
 {
-    private readonly BLiteEngine _engine;
+    private readonly BLiteEngine          _engine;
+    private readonly AuthorizationService _authz;
     private readonly ILogger<DynamicServiceImpl> _logger;
 
-    public DynamicServiceImpl(BLiteEngine engine, ILogger<DynamicServiceImpl> logger)
+    public DynamicServiceImpl(
+        BLiteEngine engine, AuthorizationService authz,
+        ILogger<DynamicServiceImpl> logger)
     {
         _engine = engine;
+        _authz  = authz;
         _logger = logger;
     }
 
-    // ── Insert ────────────────────────────────────────────────────────────────
+    // -- Insert ----------------------------------------------------------------
 
-    public override async Task<InsertResponse> Insert(InsertRequest request, ServerCallContext context)
+    public override async Task<InsertResponse> Insert(
+        InsertRequest request, ServerCallContext context)
     {
+        var col = Authorize(context, request.Collection, BLiteOperation.Insert);
         try
         {
             var doc = BsonPayloadSerializer.Deserialize(request.BsonPayload.ToByteArray());
-            var id  = await _engine.InsertAsync(request.Collection, doc, context.CancellationToken);
+            var id  = await _engine.InsertAsync(col, doc, context.CancellationToken);
             return new InsertResponse { Id = BsonIdSerializer.ToProto(id) };
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Insert failed on collection {Col}", request.Collection);
+            _logger.LogError(ex, "Insert failed on collection {Col}", col);
             return new InsertResponse { Error = ex.Message };
         }
     }
 
-    // ── FindById ──────────────────────────────────────────────────────────────
+    // -- FindById --------------------------------------------------------------
 
-    public override async Task<DocumentResponse> FindById(FindByIdRequest request,
-                                                           ServerCallContext context)
+    public override async Task<DocumentResponse> FindById(
+        FindByIdRequest request, ServerCallContext context)
     {
+        var col = Authorize(context, request.Collection, BLiteOperation.Query);
         try
         {
             var id  = BsonIdSerializer.FromProto(request.Id);
-            var doc = await _engine.FindByIdAsync(request.Collection, id, context.CancellationToken);
+            var doc = await _engine.FindByIdAsync(col, id, context.CancellationToken);
 
             if (doc is null)
                 return new DocumentResponse { Found = false };
@@ -64,55 +73,56 @@ public sealed class DynamicServiceImpl : DynamicService.DynamicServiceBase
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "FindById failed on collection {Col}", request.Collection);
+            _logger.LogError(ex, "FindById failed on collection {Col}", col);
             return new DocumentResponse { Error = ex.Message };
         }
     }
 
-    // ── Update ────────────────────────────────────────────────────────────────
+    // -- Update ----------------------------------------------------------------
 
-    public override async Task<MutationResponse> Update(UpdateRequest request,
-                                                         ServerCallContext context)
+    public override async Task<MutationResponse> Update(
+        UpdateRequest request, ServerCallContext context)
     {
+        var col = Authorize(context, request.Collection, BLiteOperation.Update);
         try
         {
             var id  = BsonIdSerializer.FromProto(request.Id);
             var doc = BsonPayloadSerializer.Deserialize(request.BsonPayload.ToByteArray());
-            var ok  = await _engine.UpdateAsync(request.Collection, id, doc,
-                                                context.CancellationToken);
+            var ok  = await _engine.UpdateAsync(col, id, doc, context.CancellationToken);
             return new MutationResponse { Success = ok };
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Update failed on collection {Col}", request.Collection);
+            _logger.LogError(ex, "Update failed on collection {Col}", col);
             return new MutationResponse { Success = false, Error = ex.Message };
         }
     }
 
-    // ── Delete ────────────────────────────────────────────────────────────────
+    // -- Delete ----------------------------------------------------------------
 
-    public override async Task<MutationResponse> Delete(DeleteRequest request,
-                                                         ServerCallContext context)
+    public override async Task<MutationResponse> Delete(
+        DeleteRequest request, ServerCallContext context)
     {
+        var col = Authorize(context, request.Collection, BLiteOperation.Delete);
         try
         {
             var id = BsonIdSerializer.FromProto(request.Id);
-            var ok = await _engine.DeleteAsync(request.Collection, id,
-                                               context.CancellationToken);
+            var ok = await _engine.DeleteAsync(col, id, context.CancellationToken);
             return new MutationResponse { Success = ok };
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Delete failed on collection {Col}", request.Collection);
+            _logger.LogError(ex, "Delete failed on collection {Col}", col);
             return new MutationResponse { Success = false, Error = ex.Message };
         }
     }
 
-    // ── Query (server-streaming) ──────────────────────────────────────────────
+    // -- Query (server-streaming) ----------------------------------------------
 
-    public override async Task Query(QueryRequest request,
-                                     IServerStreamWriter<DocumentResponse> responseStream,
-                                     ServerCallContext context)
+    public override async Task Query(
+        QueryRequest request,
+        IServerStreamWriter<DocumentResponse> responseStream,
+        ServerCallContext context)
     {
         QueryDescriptor? descriptor;
         try
@@ -127,9 +137,12 @@ public sealed class DynamicServiceImpl : DynamicService.DynamicServiceBase
                 $"Invalid QueryDescriptor: {ex.Message}"));
         }
 
+        var col = Authorize(context, descriptor.Collection, BLiteOperation.Query);
+        descriptor.Collection = col;
         var ct = context.CancellationToken;
 
-        await foreach (var doc in QueryDescriptorExecutor.ExecuteAsync(_engine, descriptor, ct))
+        await foreach (var doc in QueryDescriptorExecutor.ExecuteAsync(
+            _engine, descriptor, ct))
         {
             var response = new DocumentResponse
             {
@@ -140,35 +153,36 @@ public sealed class DynamicServiceImpl : DynamicService.DynamicServiceBase
         }
     }
 
-    // ── InsertBulk ────────────────────────────────────────────────────────────
+    // -- InsertBulk ------------------------------------------------------------
 
-    public override async Task<BulkInsertResponse> InsertBulk(BulkInsertRequest request,
-                                                               ServerCallContext context)
+    public override async Task<BulkInsertResponse> InsertBulk(
+        BulkInsertRequest request, ServerCallContext context)
     {
+        var col = Authorize(context, request.Collection, BLiteOperation.Insert);
         try
         {
             var docs = request.Payloads
                 .Select(p => BsonPayloadSerializer.Deserialize(p.ToByteArray()))
                 .ToList();
 
-            var ids = await _engine.InsertBulkAsync(request.Collection, docs,
-                                                    context.CancellationToken);
+            var ids = await _engine.InsertBulkAsync(col, docs, context.CancellationToken);
             var response = new BulkInsertResponse();
             response.Ids.AddRange(ids.Select(BsonIdSerializer.ToProto));
             return response;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "InsertBulk failed on collection {Col}", request.Collection);
+            _logger.LogError(ex, "InsertBulk failed on collection {Col}", col);
             return new BulkInsertResponse { Error = ex.Message };
         }
     }
 
-    // ── UpdateBulk ────────────────────────────────────────────────────────────
+    // -- UpdateBulk ------------------------------------------------------------
 
-    public override async Task<BulkMutationResponse> UpdateBulk(BulkUpdateRequest request,
-                                                                  ServerCallContext context)
+    public override async Task<BulkMutationResponse> UpdateBulk(
+        BulkUpdateRequest request, ServerCallContext context)
     {
+        var col = Authorize(context, request.Collection, BLiteOperation.Update);
         try
         {
             var pairs = request.Items.Select(item =>
@@ -178,50 +192,70 @@ public sealed class DynamicServiceImpl : DynamicService.DynamicServiceBase
                 return (id, doc);
             });
 
-            var count = await _engine.UpdateBulkAsync(request.Collection, pairs,
-                                                      context.CancellationToken);
+            var count = await _engine.UpdateBulkAsync(col, pairs, context.CancellationToken);
             return new BulkMutationResponse { AffectedCount = count };
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "UpdateBulk failed on collection {Col}", request.Collection);
+            _logger.LogError(ex, "UpdateBulk failed on collection {Col}", col);
             return new BulkMutationResponse { Error = ex.Message };
         }
     }
 
-    // ── DeleteBulk ────────────────────────────────────────────────────────────
+    // -- DeleteBulk ------------------------------------------------------------
 
-    public override async Task<BulkMutationResponse> DeleteBulk(BulkDeleteRequest request,
-                                                                  ServerCallContext context)
+    public override async Task<BulkMutationResponse> DeleteBulk(
+        BulkDeleteRequest request, ServerCallContext context)
     {
+        var col = Authorize(context, request.Collection, BLiteOperation.Delete);
         try
         {
             var ids   = request.Ids.Select(BsonIdSerializer.FromProto);
-            var count = await _engine.DeleteBulkAsync(request.Collection, ids,
-                                                      context.CancellationToken);
+            var count = await _engine.DeleteBulkAsync(col, ids, context.CancellationToken);
             return new BulkMutationResponse { AffectedCount = count };
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "DeleteBulk failed on collection {Col}", request.Collection);
+            _logger.LogError(ex, "DeleteBulk failed on collection {Col}", col);
             return new BulkMutationResponse { Error = ex.Message };
         }
     }
 
-    // ── Collection management ─────────────────────────────────────────────────
+    // -- Collection management -------------------------------------------------
 
-    public override Task<CollectionListResponse> ListCollections(Empty request,
-                                                                  ServerCallContext context)
+    public override Task<CollectionListResponse> ListCollections(
+        Empty request, ServerCallContext context)
     {
+        var user = BLiteServiceBase.GetCurrentUser(context);
+        _authz.RequirePermission(user, "*", BLiteOperation.Query);
+
+        var all = _engine.ListCollections();
+
+        // Return only collections belonging to this user's namespace,
+        // with the prefix stripped so the client sees logical names.
         var response = new CollectionListResponse();
-        response.Names.AddRange(_engine.ListCollections());
+        response.Names.AddRange(
+            all.Where(n => NamespaceResolver.BelongsTo(user, n))
+               .Select(n => NamespaceResolver.Strip(user, n)));
+
         return Task.FromResult(response);
     }
 
-    public override Task<MutationResponse> DropCollection(DropCollectionRequest request,
-                                                           ServerCallContext context)
+    public override Task<MutationResponse> DropCollection(
+        DropCollectionRequest request, ServerCallContext context)
     {
-        var ok = _engine.DropCollection(request.Collection);
+        var col = Authorize(context, request.Collection, BLiteOperation.Drop);
+        var ok  = _engine.DropCollection(col);
         return Task.FromResult(new MutationResponse { Success = ok });
     }
+
+    // -- Auth helper -----------------------------------------------------------
+
+    private string Authorize(ServerCallContext ctx, string collection, BLiteOperation op)
+    {
+        var user = BLiteServiceBase.GetCurrentUser(ctx);
+        _authz.RequirePermission(user, collection, op);
+        return NamespaceResolver.Resolve(user, collection);
+    }
 }
+
