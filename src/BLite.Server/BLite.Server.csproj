@@ -22,6 +22,7 @@
 
   <ItemGroup>
     <!-- gRPC host -->
+    <PackageReference Include="ErrorOr" Version="2.1.0" />
     <PackageReference Include="Grpc.AspNetCore" Version="2.76.0" />
     <!-- gRPC reflection for grpcurl/tooling in Development -->
     <PackageReference Include="Grpc.AspNetCore.Server.Reflection" Version="2.76.0" />

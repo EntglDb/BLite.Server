@@ -8,6 +8,7 @@ using BLite.Core.Storage;
 using BLite.Server;
 using BLite.Server.Auth;
 using BLite.Server.Components;
+using BLite.Server.Rest;
 using BLite.Server.Services;
 using BLite.Server.Studio;
 using BLite.Server.Telemetry;
@@ -54,6 +55,9 @@ builder.Services.AddSingleton<UserRepository>(sp =>
     new UserRepository(sp.GetRequiredService<EngineRegistry>().SystemEngine));
 builder.Services.AddSingleton<ApiKeyValidator>();
 builder.Services.AddSingleton<AuthorizationService>();
+
+// REST API
+builder.Services.AddScoped<RestAuthFilter>();
 
 // Transactions
 builder.Services.Configure<TransactionOptions>(
@@ -152,6 +156,9 @@ app.MapGrpcService<DocumentServiceImpl>();
 app.MapGrpcService<MetadataServiceImpl>();
 app.MapGrpcService<AdminServiceImpl>();
 app.MapGrpcService<TransactionServiceImpl>();
+
+// REST API endpoints (/api/v1/...)
+app.MapRestApi();
 
 // Health-check endpoint (available on all ports)
 if (!studioEnabled)
