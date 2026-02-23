@@ -1,98 +1,173 @@
-@page "/users"
+﻿@page "/users"
 @inject StudioService Studio
 @inject IJSRuntime JS
 
 <h1>Users</h1>
 
-@* ── Create user form ──────────────────────────────────────────────────── *@
-<div class="toolbar">
-    <input @bind="_newUsername"  placeholder="Username"           class="input" />
-    <input @bind="_newNamespace" placeholder="Namespace (optional)" class="input" />
-    <select @bind="_newDatabaseId" class="input">
-        <option value="">(default / system)</option>
-        @foreach (var t in _tenants)
-        {
-            <option value="@t.DatabaseId">@t.DatabaseId</option>
-        }
-    </select>
-    <button class="btn btn-primary" @onclick="CreateUser"
-            disabled="@string.IsNullOrWhiteSpace(_newUsername)">
-        Create
-    </button>
-</div>
+@* ── Create user form ──────────────────────────────────────────────────────── *@
+<details class="panel" style="margin-bottom:16px">
+    <summary class="panel-title">➕ Create user</summary>
+    <div class="panel-body">
+        <div class="toolbar">
+            <input @bind="_newUsername"  placeholder="Username"              class="input" />
+            <input @bind="_newNamespace" placeholder="Namespace (optional)"  class="input" />
+            <select @bind="_newDatabaseId" class="input">
+                <option value="">(default / system)</option>
+                @foreach (var t in _tenants)
+                {
+                    <option value="@t.DatabaseId">@t.DatabaseId</option>
+                }
+            </select>
+            <button class="btn btn-primary" @onclick="CreateUser"
+                    disabled="@string.IsNullOrWhiteSpace(_newUsername)">
+                Create
+            </button>
+        </div>
+    </div>
+</details>
 
 @if (!string.IsNullOrEmpty(_message))
 {
     <div class="alert @(_isError ? "alert-error" : "alert-ok")">@_message</div>
 }
 
-@* ── Users table ───────────────────────────────────────────────────────── *@
-<div class="table-scroll">
-    <table class="data-table">
-        <thead>
-            <tr>
-                <th>Username</th>
-                <th>Namespace</th>
-                <th>Database</th>
-                <th>Active</th>
-                <th>Created</th>
-                <th>Actions</th>
-            </tr>
-        </thead>
-        <tbody>
-            @foreach (var u in _users)
-            {
-                <tr class="@(!u.Active ? "row-inactive" : "")">
-                    <td class="mono">@u.Username</td>
-                    <td>@(u.Namespace ?? "—")</td>
-                    <td class="mono">@(u.DatabaseId ?? "(default)")</td>
-                    <td>
-                        <span class="badge @(u.Active ? "badge-active" : "badge-idle")">
-                            @(u.Active ? "Yes" : "No")
-                        </span>
-                    </td>
-                    <td>@u.CreatedAt.ToString("yyyy-MM-dd HH:mm")</td>
-                    <td>
-                        @if (!u.Username.Equals("root", StringComparison.OrdinalIgnoreCase))
-                        {
-                            @if (u.Active)
+@* ── Split layout: table left + permissions panel right ──────────────────── *@
+<div class="doc-split @(_editUser is not null ? "panel-open" : "")">
+
+    @* ── Users table ──────────────────────────────────────────────────────── *@
+    <div class="doc-list">
+        <div class="table-scroll">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Username</th>
+                        <th>Namespace</th>
+                        <th>Database</th>
+                        <th>Status</th>
+                        <th>Created</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var u in _users)
+                    {
+                        var isSelected = _editUser?.Username == u.Username;
+                        <tr class="@(!u.Active ? "row-inactive" : "") @(isSelected ? "row-selected" : "")"
+                            style="cursor:pointer"
+                            @onclick="() => SelectUser(u)">
+                            <td class="mono">@u.Username</td>
+                            <td>@(u.Namespace ?? "—")</td>
+                            <td class="mono">@(u.DatabaseId ?? "(default)")</td>
+                            <td>
+                                <span class="badge @(u.Active ? "badge-active" : "badge-idle")">
+                                    @(u.Active ? "Active" : "Revoked")
+                                </span>
+                            </td>
+                            <td>@u.CreatedAt.ToString("yyyy-MM-dd")</td>
+                            <td @onclick:stopPropagation>
+                                @if (!u.Username.Equals("root", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    @if (u.Active)
+                                    {
+                                        <button class="btn btn-small" @onclick="() => RotateKey(u.Username)">Rotate Key</button>
+                                        <button class="btn btn-small btn-danger" @onclick="() => Revoke(u.Username)">Revoke</button>
+                                    }
+                                    <button class="btn btn-small btn-danger" @onclick="() => ConfirmDelete(u.Username)">Delete</button>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    @* ── Permissions editor panel ──────────────────────────────────────────── *@
+    @if (_editUser is not null)
+    {
+        <div class="doc-editor">
+            <div class="doc-editor-header">
+                <span>🔐 Permissions — <strong class="mono">@_editUser.Username</strong></span>
+                <button class="btn btn-small" @onclick="ClosePermPanel">✕</button>
+            </div>
+            <div class="doc-editor-body">
+                <p class="subtitle" style="margin-bottom:12px">
+                    Database: <span class="mono">@(_editUser.DatabaseId ?? "(default)")</span>
+                    @if (_editUser.Namespace is not null)
+                    {
+                        @: &nbsp;· Namespace: <span class="mono">@_editUser.Namespace</span>
+                    }
+                </p>
+
+                <table class="data-table" style="margin-bottom:10px">
+                    <thead>
+                        <tr>
+                            <th style="min-width:120px">Collection</th>
+                            @foreach (var op in _allOps)
                             {
-                                <button class="btn btn-small" @onclick="() => RotateKey(u.Username)">
-                                    Rotate Key
-                                </button>
-                                <button class="btn btn-small btn-danger" @onclick="() => Revoke(u.Username)">
-                                    Revoke
-                                </button>
+                                <th title="@op" style="text-align:center;min-width:44px">@op.ToString()[..3]</th>
                             }
-                            <button class="btn btn-small btn-danger" @onclick="() => ConfirmDelete(u.Username)">
-                                Delete
-                            </button>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @for (int i = 0; i < _editPerms.Count; i++)
+                        {
+                            var idx = i;
+                            <tr>
+                                <td>
+                                    <input class="input" style="min-width:0;width:100%"
+                                           value="@_editPerms[idx].Collection"
+                                           @onchange="e => SetPermCollection(idx, e.Value?.ToString() ?? string.Empty)" />
+                                </td>
+                                @foreach (var op in _allOps)
+                                {
+                                    var capturedOp = op;
+                                    <td style="text-align:center">
+                                        <input type="checkbox"
+                                               checked="@((_editPerms[idx].Ops & capturedOp) != 0)"
+                                               @onchange="e => ToggleOp(idx, capturedOp, (bool)(e.Value ?? false))" />
+                                    </td>
+                                }
+                                <td><button class="btn btn-small btn-danger" @onclick="() => RemovePerm(idx)">✕</button></td>
+                            </tr>
                         }
-                    </td>
-                </tr>
-            }
-        </tbody>
-    </table>
+                    </tbody>
+                </table>
+
+                <div class="toolbar" style="margin-bottom:12px">
+                    <button class="btn btn-small" @onclick="AddPermRow">+ Add rule</button>
+                    <button class="btn btn-small" @onclick="AddAllRule">+ All on *</button>
+                </div>
+
+                @if (!string.IsNullOrEmpty(_permMessage))
+                {
+                    <div class="alert @(_permError ? "alert-error" : "alert-ok")" style="margin-bottom:10px">@_permMessage</div>
+                }
+
+                <div style="display:flex;gap:8px">
+                    <button class="btn btn-primary" @onclick="SavePermissions" disabled="@_savingPerms">
+                        @(_savingPerms ? "Saving…" : "Save permissions")
+                    </button>
+                    <button class="btn" @onclick="ClosePermPanel">Cancel</button>
+                </div>
+            </div>
+        </div>
+    }
 </div>
 
-@* ── API Key modal ──────────────────────────────────────────────────────── *@
+@* ── API Key modal ──────────────────────────────────────────────────────────── *@
 @if (_showKeyModal)
 {
     <div class="modal-backdrop" @onclick="CloseModal">
         <div class="modal" @onclick:stopPropagation>
             <h2>🔑 Save your API Key</h2>
-            <p class="modal-warn">
-                ⚠️ This key is shown <strong>only once</strong> and cannot be recovered.
-                Copy it now and store it securely.
-            </p>
+            <p class="modal-warn">⚠️ This key is shown <strong>only once</strong>. Store it securely.</p>
             <div class="key-box">
                 <span class="mono">@_newApiKey</span>
                 <button class="btn btn-small" @onclick="CopyKey">Copy</button>
             </div>
-            @if (_copied)
-            {
-                <p class="copy-ok">✓ Copied to clipboard</p>
-            }
+            @if (_copied) { <p class="copy-ok">✓ Copied to clipboard</p> }
             <div class="modal-footer">
                 <button class="btn btn-primary" @onclick="CloseModal">I saved the key</button>
             </div>
@@ -100,14 +175,13 @@
     </div>
 }
 
-@* ── Delete confirm modal ───────────────────────────────────────────────── *@
+@* ── Delete confirm modal ───────────────────────────────────────────────────── *@
 @if (_deleteTarget is not null)
 {
     <div class="modal-backdrop" @onclick="CancelDelete">
         <div class="modal" @onclick:stopPropagation>
             <h2>⚠️ Confirm deletion</h2>
-            <p>Permanently delete user <strong class="mono">@_deleteTarget</strong>?
-               This cannot be undone.</p>
+            <p>Permanently delete user <strong class="mono">@_deleteTarget</strong>? This cannot be undone.</p>
             <div class="modal-footer">
                 <button class="btn btn-danger" @onclick="DeleteUser">Delete permanently</button>
                 <button class="btn" @onclick="CancelDelete">Cancel</button>
@@ -117,21 +191,42 @@
 }
 
 @code {
-    private IReadOnlyList<BLite.Server.Auth.BLiteUser> _users  = [];
-    private IReadOnlyList<TenantEntry>                 _tenants = [];
+    private IReadOnlyList<BLiteUser>   _users   = [];
+    private IReadOnlyList<TenantEntry> _tenants = [];
+
     private string _newUsername   = "";
     private string _newNamespace  = "";
     private string _newDatabaseId = "";
     private string _message       = "";
     private bool   _isError;
 
-    // key modal
     private bool   _showKeyModal;
     private string _newApiKey = "";
     private bool   _copied;
 
-    // delete confirm
     private string? _deleteTarget;
+
+    private BLiteUser?     _editUser;
+    private List<PermEdit> _editPerms   = [];
+    private string         _permMessage = "";
+    private bool           _permError;
+    private bool           _savingPerms;
+
+    private static readonly BLiteOperation[] _allOps =
+    [
+        BLiteOperation.Query,
+        BLiteOperation.Insert,
+        BLiteOperation.Update,
+        BLiteOperation.Delete,
+        BLiteOperation.Drop,
+        BLiteOperation.Admin,
+    ];
+
+    private sealed class PermEdit
+    {
+        public string         Collection { get; set; } = "*";
+        public BLiteOperation Ops        { get; set; } = BLiteOperation.All;
+    }
 
     protected override void OnInitialized() => Refresh();
 
@@ -141,6 +236,62 @@
         _tenants = Studio.ListTenants();
     }
 
+    private void SelectUser(BLiteUser u)
+    {
+        _editUser    = u;
+        _permMessage = "";
+        _editPerms   = u.Permissions
+            .Select(p => new PermEdit { Collection = p.Collection, Ops = p.Ops })
+            .ToList();
+    }
+
+    private void ClosePermPanel() { _editUser = null; _editPerms = []; }
+
+    private void AddPermRow()
+        => _editPerms.Add(new PermEdit { Collection = "*", Ops = BLiteOperation.None });
+
+    private void AddAllRule()
+        => _editPerms.Add(new PermEdit { Collection = "*", Ops = BLiteOperation.All });
+
+    private void RemovePerm(int idx) => _editPerms.RemoveAt(idx);
+    private void SetPermCollection(int idx, string col) => _editPerms[idx].Collection = col;
+
+    private void ToggleOp(int idx, BLiteOperation op, bool on)
+    {
+        if (on) _editPerms[idx].Ops |=  op;
+        else    _editPerms[idx].Ops &= ~op;
+    }
+
+    private async Task SavePermissions()
+    {
+        if (_editUser is null) return;
+        _savingPerms = true;
+        _permMessage = "";
+        try
+        {
+            var perms = _editPerms
+                .Where(p => !string.IsNullOrWhiteSpace(p.Collection))
+                .Select(p => new PermissionEntry(p.Collection.Trim(), p.Ops))
+                .ToList();
+
+            var ok = await Studio.UpdatePermissionsAsync(_editUser.Username, perms);
+            if (ok)
+            {
+                _permMessage = "Permissions saved.";
+                _permError   = false;
+                Refresh();
+                _editUser = Studio.GetUser(_editUser.Username);
+            }
+            else
+            {
+                _permMessage = "User not found.";
+                _permError   = true;
+            }
+        }
+        catch (Exception ex) { _permMessage = ex.Message; _permError = true; }
+        finally { _savingPerms = false; }
+    }
+
     private async Task CreateUser()
     {
         try
@@ -148,10 +299,7 @@
             var ns   = string.IsNullOrWhiteSpace(_newNamespace)  ? null : _newNamespace.Trim();
             var dbId = string.IsNullOrWhiteSpace(_newDatabaseId) ? null : _newDatabaseId.Trim();
             var key  = await Studio.CreateUserAsync(_newUsername.Trim(), ns, dbId);
-            _newApiKey     = key;
-            _showKeyModal  = true;
-            _copied        = false;
-            _message       = "";
+            _newApiKey = key; _showKeyModal = true; _copied = false; _message = "";
             _newUsername = _newNamespace = _newDatabaseId = "";
             Refresh();
         }
@@ -163,9 +311,9 @@
         try
         {
             await Studio.RevokeUserAsync(username);
-            _message = $"User '{username}' revoked.";
-            _isError = false;
+            _message = $"User '{username}' revoked."; _isError = false;
             Refresh();
+            if (_editUser?.Username == username) _editUser = Studio.GetUser(username);
         }
         catch (Exception ex) { _message = ex.Message; _isError = true; }
     }
@@ -179,8 +327,8 @@
         try
         {
             await Studio.DeleteUserAsync(_deleteTarget);
-            _message = $"User '{_deleteTarget}' deleted.";
-            _isError = false;
+            _message = $"User '{_deleteTarget}' deleted."; _isError = false;
+            if (_editUser?.Username == _deleteTarget) ClosePermPanel();
             _deleteTarget = null;
             Refresh();
         }
@@ -192,18 +340,8 @@
         try
         {
             var key = await Studio.RotateKeyAsync(username);
-            if (key is not null)
-            {
-                _newApiKey    = key;
-                _showKeyModal = true;
-                _copied       = false;
-                _message      = "";
-            }
-            else
-            {
-                _message = $"User '{username}' not found.";
-                _isError = true;
-            }
+            if (key is not null) { _newApiKey = key; _showKeyModal = true; _copied = false; _message = ""; }
+            else { _message = $"User '{username}' not found."; _isError = true; }
             Refresh();
         }
         catch (Exception ex) { _message = ex.Message; _isError = true; }
@@ -212,7 +350,5 @@
     private void CloseModal() { _showKeyModal = false; _newApiKey = ""; }
 
     private async Task CopyKey()
-    {
-        _copied = await JS.InvokeAsync<bool>("studioClipboard.copy", _newApiKey);
-    }
+        => _copied = await JS.InvokeAsync<bool>("studioClipboard.copy", _newApiKey);
 }
