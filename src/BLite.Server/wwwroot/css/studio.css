@@ -452,6 +452,82 @@ select.input {
     margin-top: 16px;
 }
 
+/* ── Document browser (split pane) ──────────────────────────────────────── */
+
+.doc-browser {
+    display: flex;
+    gap: 16px;
+    align-items: flex-start;
+    min-height: 0;
+}
+
+.doc-table-pane {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+}
+
+.row-selected td { background: var(--accent-bg) !important; }
+
+.btn-active {
+    background: var(--accent-bg);
+    color: var(--accent);
+    border-color: var(--accent);
+}
+
+.doc-editor-pane {
+    width: 420px;
+    flex-shrink: 0;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    position: sticky;
+    top: 0;
+}
+
+.doc-editor-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    gap: 8px;
+}
+
+.doc-editor-id {
+    font-size: 12px;
+    color: var(--text-dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+}
+
+.doc-json-textarea {
+    border-radius: 0 !important;
+    border-left: none !important;
+    border-right: none !important;
+    min-height: 380px;
+    resize: vertical;
+}
+
+.doc-editor-footer {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 10px;
+    padding: 8px 12px;
+    border-top: 1px solid var(--border);
+}
+
+.doc-editor-msg { font-size: 12px; flex: 1; }
+
+.text-red   { color: var(--red); }
+.text-green { color: var(--green); }
+
 /* ── Setup wizard (SetupLayout) ───────────────────────────────────────────── */
 
 .setup-page {

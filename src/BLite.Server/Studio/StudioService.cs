@@ -241,6 +241,34 @@ public sealed class StudioService
         return await engine.DeleteAsync(collection, id, ct);
     }
 
+    /// <summary>
+    /// Fetches a single document by ID and serialises it to indented JSON.
+    /// </summary>
+    public async Task<string> GetDocumentAsJsonAsync(
+        string? databaseId, string collection, BsonId id,
+        CancellationToken ct = default)
+    {
+        var engine = _registry.GetEngine(databaseId);
+        var doc    = await engine.FindByIdAsync(collection, id, ct);
+        if (doc is null) throw new KeyNotFoundException($"Document {id} not found.");
+        return BsonJsonConverter.ToJson(doc, indented: true);
+    }
+
+    /// <summary>
+    /// Parses <paramref name="json"/> and replaces the document with the specified ID.
+    /// </summary>
+    public async Task<bool> UpdateDocumentFromJsonAsync(
+        string? databaseId, string collection, BsonId id, string json,
+        CancellationToken ct = default)
+    {
+        var engine = _registry.GetEngine(databaseId);
+        engine.RegisterKeys(CollectJsonKeys(json));
+        var keyMap     = (ConcurrentDictionary<string, ushort>)engine.GetKeyMap();
+        var reverseMap = (ConcurrentDictionary<ushort, string>)engine.GetKeyReverseMap();
+        var doc        = BsonJsonConverter.FromJson(json, keyMap, reverseMap);
+        return await engine.UpdateAsync(collection, id, doc, ct);
+    }
+
     // ── Helpers ────────────────────────────────────────────────────────────────
 
     private static DocumentRow DocumentToRow(BsonDocument doc)

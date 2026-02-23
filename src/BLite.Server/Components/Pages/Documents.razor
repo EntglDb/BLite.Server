@@ -17,52 +17,96 @@
     <div class="alert @(_isError ? "alert-error" : "alert-ok")">@_message</div>
 }
 
-<div class="toolbar">
-    <span class="toolbar-label">Showing @_rows.Count of @_totalCount documents</span>
-    <button class="btn btn-small" disabled="@(_page <= 0)" @onclick="PrevPage">◀ Prev</button>
-    <span class="toolbar-label">Page @(_page + 1)</span>
-    <button class="btn btn-small" disabled="@(!_hasNext)" @onclick="NextPage">Next ▶</button>
+<div class="doc-browser">
+
+    <div class="doc-table-pane">
+        <div class="toolbar">
+            <span class="toolbar-label">Showing @_rows.Count of @_totalCount documents</span>
+            <button class="btn btn-small" disabled="@(_page <= 0)" @onclick="PrevPage">◀ Prev</button>
+            <span class="toolbar-label">Page @(_page + 1)</span>
+            <button class="btn btn-small" disabled="@(!_hasNext)" @onclick="NextPage">Next ▶</button>
+        </div>
+
+        @if (_rows.Count > 0)
+        {
+            <div class="table-scroll">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>_id</th>
+                            @foreach (var col in _columns)
+                            {
+                                <th>@col</th>
+                            }
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var row in _rows)
+                        {
+                            var isSelected = _editId is not null && _editId.Equals(row.Id);
+                            <tr class="@(isSelected ? "row-selected" : "")">
+                                <td class="mono">@FormatId(row.Id)</td>
+                                @foreach (var col in _columns)
+                                {
+                                    <td>@(row.Fields.GetValueOrDefault(col, ""))</td>
+                                }
+                                <td>
+                                    <button class="btn btn-small @(isSelected ? "btn-active" : "")"
+                                            @onclick="() => OpenEditor(row.Id)">
+                                        @(isSelected ? "▶ Open" : "Open")
+                                    </button>
+                                    <button class="btn btn-small btn-danger"
+                                            @onclick="() => Delete(row.Id)">
+                                        Delete
+                                    </button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+        else
+        {
+            <p class="empty">No documents in this collection.</p>
+        }
+    </div>
+
+    @if (_editId is not null)
+    {
+        <div class="doc-editor-pane">
+            <div class="doc-editor-header">
+                <span class="mono doc-editor-id" title="@FormatId(_editId)">@FormatId(_editId)</span>
+                <button class="btn btn-small" @onclick="CloseEditor" title="Close panel">✕</button>
+            </div>
+            @if (_loadingJson)
+            {
+                <p class="loading" style="padding:16px">Loading…</p>
+            }
+            else
+            {
+                <textarea class="json-editor doc-json-textarea"
+                          @bind="_editJson" @bind:event="oninput"
+                          spellcheck="false"></textarea>
+                <div class="doc-editor-footer">
+                    @if (!string.IsNullOrEmpty(_editorMessage))
+                    {
+                        <span class="doc-editor-msg @(_editorError ? "text-red" : "text-green")">
+                            @_editorMessage
+                        </span>
+                    }
+                    <button class="btn btn-primary btn-small" @onclick="SaveDocument"
+                            disabled="@_saving">
+                        @(_saving ? "Saving…" : "💾 Save")
+                    </button>
+                </div>
+            }
+        </div>
+    }
+
 </div>
 
-@if (_rows.Count > 0)
-{
-    <div class="table-scroll">
-        <table class="data-table">
-            <thead>
-                <tr>
-                    <th>_id</th>
-                    @foreach (var col in _columns)
-                    {
-                        <th>@col</th>
-                    }
-                    <th>Actions</th>
-                </tr>
-            </thead>
-            <tbody>
-                @foreach (var row in _rows)
-                {
-                    <tr>
-                        <td class="mono">@FormatId(row.Id)</td>
-                        @foreach (var col in _columns)
-                        {
-                            <td>@(row.Fields.GetValueOrDefault(col, ""))</td>
-                        }
-                        <td>
-                            <button class="btn btn-small btn-danger"
-                                    @onclick="() => Delete(row.Id)">
-                                Delete
-                            </button>
-                        </td>
-                    </tr>
-                }
-            </tbody>
-        </table>
-    </div>
-}
-else
-{
-    <p class="empty">No documents in this collection.</p>
-}
 
 @code {
     [Parameter, SupplyParameterFromQuery(Name = "db")] public string? DatabaseId { get; set; }
@@ -70,13 +114,21 @@ else
 
     private const int PageSize = 50;
 
-    private List<DocumentRow> _rows = [];
-    private List<string> _columns = [];
-    private int _totalCount;
-    private int _page;
+    private List<DocumentRow> _rows    = [];
+    private List<string>      _columns = [];
+    private int  _totalCount;
+    private int  _page;
     private bool _hasNext;
     private string _message = "";
-    private bool _isError;
+    private bool   _isError;
+
+    // JSON editor panel
+    private BLite.Bson.BsonId? _editId;
+    private string _editJson       = "";
+    private string _editorMessage  = "";
+    private bool   _editorError;
+    private bool   _loadingJson;
+    private bool   _saving;
 
     protected override async Task OnParametersSetAsync() => await LoadPage();
 
@@ -84,14 +136,12 @@ else
     {
         try
         {
-            var dbId = string.IsNullOrEmpty(DatabaseId) ? null : Uri.UnescapeDataString(DatabaseId);
-            var col  = Uri.UnescapeDataString(Collection);
+            var col = Uri.UnescapeDataString(Collection);
 
-            _totalCount = await Studio.CountDocumentsAsync(dbId, col);
-            _rows = await Studio.GetDocumentsAsync(dbId, col, _page * PageSize, PageSize);
-            _hasNext = (_page + 1) * PageSize < _totalCount;
+            _totalCount = await Studio.CountDocumentsAsync(DbId, col);
+            _rows       = await Studio.GetDocumentsAsync(DbId, col, _page * PageSize, PageSize);
+            _hasNext    = (_page + 1) * PageSize < _totalCount;
 
-            // Compute union of all field names across returned rows
             _columns = _rows
                 .SelectMany(r => r.Fields.Keys)
                 .Distinct()
@@ -107,6 +157,47 @@ else
         }
     }
 
+    private async Task OpenEditor(BLite.Bson.BsonId id)
+    {
+        if (_editId is not null && _editId.Equals(id)) { CloseEditor(); return; }
+
+        _editId        = id;
+        _editorMessage = "";
+        _editorError   = false;
+        _loadingJson   = true;
+
+        try
+        {
+            _editJson = await Studio.GetDocumentAsJsonAsync(DbId, Uri.UnescapeDataString(Collection), id);
+        }
+        catch (Exception ex) { _editorMessage = ex.Message; _editorError = true; }
+        finally  { _loadingJson = false; }
+    }
+
+    private void CloseEditor()
+    {
+        _editId        = null;
+        _editJson      = "";
+        _editorMessage = "";
+    }
+
+    private async Task SaveDocument()
+    {
+        if (_editId is null) return;
+        _saving = true;
+        _editorMessage = "";
+        try
+        {
+            var ok = await Studio.UpdateDocumentFromJsonAsync(
+                DbId, Uri.UnescapeDataString(Collection), _editId!.Value, _editJson);
+            _editorMessage = ok ? "Saved." : "Document not found.";
+            _editorError   = !ok;
+            if (ok) await LoadPage();
+        }
+        catch (Exception ex) { _editorMessage = ex.Message; _editorError = true; }
+        finally { _saving = false; }
+    }
+
     private async Task PrevPage() { _page = Math.Max(0, _page - 1); await LoadPage(); }
     private async Task NextPage() { _page++; await LoadPage(); }
 
@@ -114,19 +205,22 @@ else
     {
         try
         {
-            var dbId = string.IsNullOrEmpty(DatabaseId) ? null : Uri.UnescapeDataString(DatabaseId);
-            await Studio.DeleteDocumentAsync(dbId, Uri.UnescapeDataString(Collection), id);
+            await Studio.DeleteDocumentAsync(DbId, Uri.UnescapeDataString(Collection), id);
             _message = "Document deleted.";
             _isError = false;
+            if (_editId is not null && _editId.Equals(id)) CloseEditor();
             await LoadPage();
         }
         catch (Exception ex) { _message = ex.Message; _isError = true; }
     }
 
-    private static string FormatId(BLite.Bson.BsonId id) => id.ToString() ?? "?";
+    private string? DbId =>
+        string.IsNullOrEmpty(DatabaseId) ? null : Uri.UnescapeDataString(DatabaseId);
 
     private string CollectionsUrl =>
         string.IsNullOrEmpty(DatabaseId)
             ? "/collections"
             : $"/collections/{Uri.EscapeDataString(DatabaseId)}";
+
+    private static string FormatId(BLite.Bson.BsonId? id) => id?.ToString() ?? "?";
 }
