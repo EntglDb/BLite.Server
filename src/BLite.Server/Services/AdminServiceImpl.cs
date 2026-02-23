@@ -13,17 +13,21 @@ namespace BLite.Server.Services;
 
 public sealed class AdminServiceImpl : AdminService.AdminServiceBase
 {
-    private readonly UserRepository     _users;
-    private readonly AuthorizationService _authz;
+    private readonly UserRepository          _users;
+    private readonly AuthorizationService    _authz;
+    private readonly EngineRegistry          _registry;
     private readonly ILogger<AdminServiceImpl> _logger;
 
     public AdminServiceImpl(
-        UserRepository users, AuthorizationService authz,
+        UserRepository       users,
+        AuthorizationService authz,
+        EngineRegistry       registry,
         ILogger<AdminServiceImpl> logger)
     {
-        _users  = users;
-        _authz  = authz;
-        _logger = logger;
+        _users    = users;
+        _authz    = authz;
+        _registry = registry;
+        _logger   = logger;
     }
 
     // ── CreateUser ────────────────────────────────────────────────────────────
@@ -36,9 +40,11 @@ public sealed class AdminServiceImpl : AdminService.AdminServiceBase
         {
             var perms = MapPerms(request.Permissions);
             string? ns = string.IsNullOrWhiteSpace(request.Namespace) ? null : request.Namespace;
+            string? dbId = string.IsNullOrWhiteSpace(request.DatabaseId) ? null : request.DatabaseId;
             var (_, plainKey) = await _users.CreateAsync(request.Username, ns, perms,
-                                                         context.CancellationToken);
-            _logger.LogInformation("Created user '{User}' (ns={Ns})", request.Username, ns ?? "(root)");
+                                                         dbId, context.CancellationToken);
+            _logger.LogInformation("Created user '{User}' (ns={Ns}, db={Db})",
+                request.Username, ns ?? "(root)", dbId ?? "(default)");
             return new CreateUserResponse { ApiKey = plainKey };
         }
         catch (Exception ex)
@@ -89,7 +95,8 @@ public sealed class AdminServiceImpl : AdminService.AdminServiceBase
             var info = new UserInfo
             {
                 Username   = u.Username,
-                Namespace  = u.Namespace ?? "",
+                Namespace  = u.Namespace  ?? "",
+                DatabaseId = u.DatabaseId ?? "",
                 Active     = u.Active,
                 CreatedAt  = u.CreatedAt.ToString("O")
             };
@@ -115,7 +122,65 @@ public sealed class AdminServiceImpl : AdminService.AdminServiceBase
                                                        context.CancellationToken);
         return new MutationResponse { Success = ok };
     }
+    // ── ProvisionTenant ─────────────────────────────────────────────────────────────
 
+    public override async Task<ProvisionTenantResponse> ProvisionTenant(
+        ProvisionTenantRequest request, ServerCallContext context)
+    {
+        RequireAdmin(context);
+        try
+        {
+            await _registry.ProvisionAsync(request.DatabaseId, context.CancellationToken);
+            _logger.LogInformation("Tenant '{Db}' provisioned.", request.DatabaseId);
+            return new ProvisionTenantResponse { Success = true };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "ProvisionTenant failed for '{Db}'", request.DatabaseId);
+            return new ProvisionTenantResponse { Error = ex.Message };
+        }
+    }
+
+    // ── DeprovisionTenant ────────────────────────────────────────────────────────
+
+    public override async Task<DeprovisionTenantResponse> DeprovisionTenant(
+        DeprovisionTenantRequest request, ServerCallContext context)
+    {
+        RequireAdmin(context);
+        try
+        {
+            await _registry.DeprovisionAsync(
+                request.DatabaseId, request.DeleteFiles, context.CancellationToken);
+            _logger.LogInformation(
+                "Tenant '{Db}' deprovisioned (deleteFiles={Del}).",
+                request.DatabaseId, request.DeleteFiles);
+            return new DeprovisionTenantResponse { Success = true };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "DeprovisionTenant failed for '{Db}'", request.DatabaseId);
+            return new DeprovisionTenantResponse { Error = ex.Message };
+        }
+    }
+
+    // ── ListTenants ──────────────────────────────────────────────────────────────
+
+    public override Task<ListTenantsResponse> ListTenants(
+        Empty request, ServerCallContext context)
+    {
+        RequireAdmin(context);
+        var response = new ListTenantsResponse();
+        foreach (var t in _registry.ListTenants())
+        {
+            response.Tenants.Add(new TenantInfo
+            {
+                DatabaseId   = t.DatabaseId,
+                DatabasePath = t.DatabasePath,
+                IsActive     = t.IsActive
+            });
+        }
+        return Task.FromResult(response);
+    }
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private static void RequireAdmin(ServerCallContext ctx)

@@ -1,0 +1,12 @@
+<Router AppAssembly="typeof(App).Assembly">
+    <Found Context="routeData">
+        <RouteView RouteData="routeData" DefaultLayout="typeof(Layout.StudioLayout)" />
+        <FocusOnNavigate RouteData="routeData" Selector="h1" />
+    </Found>
+    <NotFound>
+        <LayoutView Layout="typeof(Layout.StudioLayout)">
+            <h2>Page not found</h2>
+            <p>The requested page does not exist in BLite Studio.</p>
+        </LayoutView>
+    </NotFound>
+</Router>

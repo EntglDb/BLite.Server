@@ -1,3 +1,4 @@
+using BLite.Core;
 using BLite.Server.Auth;
 using Grpc.Core;
 
@@ -9,18 +10,26 @@ namespace BLite.Server.Transactions;
 /// </summary>
 public sealed class TransactionSession
 {
-    public string    TxnId    { get; }
-    public BLiteUser Owner    { get; }
+    public string      TxnId      { get; }
+    public BLiteUser   Owner      { get; }
+    /// <summary>The database (engine) this transaction is running against.</summary>
+    public string      DatabaseId { get; }  // canonical key: empty string = default
+    /// <summary>The resolved engine for this transaction.</summary>
+    public BLiteEngine Engine     { get; }
 
     private DateTime _lastActivity;
     private readonly int _timeoutSeconds;
 
-    public TransactionSession(string txnId, BLiteUser owner, int timeoutSeconds)
+    public TransactionSession(
+        string txnId, BLiteUser owner, int timeoutSeconds,
+        string databaseId, BLiteEngine engine)
     {
-        TxnId          = txnId;
-        Owner          = owner;
+        TxnId           = txnId;
+        Owner           = owner;
+        DatabaseId      = databaseId;
+        Engine          = engine;
         _timeoutSeconds = timeoutSeconds;
-        _lastActivity  = DateTime.UtcNow;
+        _lastActivity   = DateTime.UtcNow;
     }
 
     /// <summary>Returns true when the session has not been used within the configured timeout.</summary>

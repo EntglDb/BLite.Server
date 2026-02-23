@@ -79,13 +79,15 @@ public sealed class UserRepository
     public async Task<(BLiteUser User, string PlainKey)> CreateAsync(
         string username, string? ns,
         IReadOnlyList<PermissionEntry> perms,
+        string? databaseId = null,
         CancellationToken ct = default)
     {
         if (_byName.ContainsKey(username))
             throw new InvalidOperationException($"User '{username}' already exists.");
 
         var plainKey = GenerateKey();
-        var user = new BLiteUser(username, HashKey(plainKey), ns, perms, true, DateTime.UtcNow);
+        var user = new BLiteUser(username, HashKey(plainKey), ns, perms, true, DateTime.UtcNow,
+            DatabaseId: string.IsNullOrWhiteSpace(databaseId) ? null : databaseId);
         await PersistNewAsync(user, ct);
         return (user, plainKey);
     }
@@ -98,7 +100,8 @@ public sealed class UserRepository
         var doc = await col.FindByIdAsync(id, ct);
         if (doc is null) return false;
 
-        var updated = col.CreateDocument(["username", "key_hash", "namespace", "active", "created_at", "perms"],
+        var updated = col.CreateDocument(
+            ["username", "key_hash", "namespace", "active", "created_at", "perms", "database_id"],
             b => RebuildBuilder(b, doc, active: false));
 
         var ok = await col.UpdateAsync(id, updated, ct);
@@ -108,6 +111,29 @@ public sealed class UserRepository
             // Invalidate cache
             var oldUser = _byKey.Values.FirstOrDefault(u => u.Username.Equals(username, StringComparison.OrdinalIgnoreCase));
             if (oldUser is not null) _byKey.TryRemove(oldUser.ApiKeyHash, out _);
+        }
+
+        return ok;
+    }
+
+    /// <summary>
+    /// Permanently deletes a user from storage and all in-memory caches.
+    /// Unlike Revoke, the username can be reused after deletion.
+    /// Returns false if the user was not found.
+    /// </summary>
+    public async Task<bool> DeleteUserAsync(string username, CancellationToken ct = default)
+    {
+        if (!_byName.TryGetValue(username, out var id)) return false;
+
+        var col = _engine.GetOrCreateCollection(Collection);
+        var ok  = await col.DeleteAsync(id, ct);
+
+        if (ok)
+        {
+            _byName.TryRemove(username, out _);
+            var old = _byKey.Values.FirstOrDefault(u =>
+                u.Username.Equals(username, StringComparison.OrdinalIgnoreCase));
+            if (old is not null) _byKey.TryRemove(old.ApiKeyHash, out _);
         }
 
         return ok;
@@ -124,7 +150,8 @@ public sealed class UserRepository
         var plainKey = GenerateKey();
         var newHash  = HashKey(plainKey);
 
-        var updated = col.CreateDocument(["username", "key_hash", "namespace", "active", "created_at", "perms"],
+        var updated = col.CreateDocument(
+            ["username", "key_hash", "namespace", "active", "created_at", "perms", "database_id"],
             b => RebuildBuilder(b, doc, keyHash: newHash));
 
         var ok = await col.UpdateAsync(id, updated, ct);
@@ -152,7 +179,8 @@ public sealed class UserRepository
         if (doc is null) return false;
 
         var permsBytes = Convert.ToBase64String(MessagePackSerializer.Serialize(ToProtoPerms(perms)));
-        var updated = col.CreateDocument(["username", "key_hash", "namespace", "active", "created_at", "perms"],
+        var updated = col.CreateDocument(
+            ["username", "key_hash", "namespace", "active", "created_at", "perms", "database_id"],
             b => RebuildBuilder(b, doc, permsBytes: permsBytes));
 
         var ok = await col.UpdateAsync(id, updated, ct);
@@ -195,14 +223,15 @@ public sealed class UserRepository
             MessagePackSerializer.Serialize(ToProtoPerms(user.Permissions)));
 
         var doc = col.CreateDocument(
-            ["username", "key_hash", "namespace", "active", "created_at", "perms"],
+            ["username", "key_hash", "namespace", "active", "created_at", "perms", "database_id"],
             b => b
-                .AddString("username",   user.Username)
-                .AddString("key_hash",   user.ApiKeyHash)
-                .AddString("namespace",  user.Namespace ?? "")
-                .AddBoolean("active",    user.Active)
+                .AddString("username",    user.Username)
+                .AddString("key_hash",    user.ApiKeyHash)
+                .AddString("namespace",   user.Namespace   ?? "")
+                .AddBoolean("active",     user.Active)
                 .AddDateTime("created_at", user.CreatedAt)
-                .AddString("perms",      permsB64));
+                .AddString("perms",       permsB64)
+                .AddString("database_id", user.DatabaseId ?? ""));
 
         var id = await col.InsertAsync(doc, ct);
         _byKey[user.ApiKeyHash] = user with { StoredId = id };
@@ -214,8 +243,10 @@ public sealed class UserRepository
         if (!doc.TryGetId(out var id))         return null;
         if (!doc.TryGetString("username",    out var username)   || username is null) return null;
         if (!doc.TryGetString("key_hash",    out var keyHash)    || keyHash  is null) return null;
-        if (!doc.TryGetString("namespace",   out var nsRaw))     nsRaw = null;
+        if (!doc.TryGetString("namespace",   out var nsRaw))     nsRaw      = null;
         if (!doc.TryGetString("perms",       out var permsB64)   || permsB64 is null) return null;
+        doc.TryGetString("database_id", out var dbIdRaw);
+        string? dbId = string.IsNullOrEmpty(dbIdRaw) ? null : dbIdRaw;
 
         bool active = true;
         if (doc.TryGetValue("active", out var activeBv))
@@ -236,7 +267,7 @@ public sealed class UserRepository
         }
         catch { /* corrupt entry — treat as no permissions */ }
 
-        return new BLiteUser(username, keyHash, ns, perms, active, createdAt, id);
+        return new BLiteUser(username, keyHash, ns, perms, active, createdAt, id, dbId);
     }
 
     /// <summary>
@@ -244,22 +275,24 @@ public sealed class UserRepository
     /// </summary>
     private static BsonDocumentBuilder RebuildBuilder(
         BsonDocumentBuilder b, BsonDocument src,
-        bool?   active    = null,
-        string? keyHash   = null,
+        bool?   active     = null,
+        string? keyHash    = null,
         string? permsBytes = null)
     {
-        src.TryGetString("username",   out var u);
-        src.TryGetString("key_hash",   out var k);
-        src.TryGetString("namespace",  out var n);
-        src.TryGetValue("created_at",  out var ca);
-        src.TryGetString("perms",      out var p);
+        src.TryGetString("username",    out var u);
+        src.TryGetString("key_hash",    out var k);
+        src.TryGetString("namespace",   out var n);
+        src.TryGetValue("created_at",   out var ca);
+        src.TryGetString("perms",       out var p);
+        src.TryGetString("database_id", out var d);
 
-        b.AddString("username",   u   ?? "");
-        b.AddString("key_hash",   keyHash  ?? k   ?? "");
-        b.AddString("namespace",  n   ?? "");
-        b.AddBoolean("active",    active   ?? (src.TryGetValue("active", out var a) && a.AsBoolean));
+        b.AddString("username",    u   ?? "");
+        b.AddString("key_hash",    keyHash   ?? k ?? "");
+        b.AddString("namespace",   n   ?? "");
+        b.AddBoolean("active",     active    ?? (src.TryGetValue("active", out var a) && a.AsBoolean));
         b.AddDateTime("created_at", ca.IsNull ? DateTime.UtcNow : ca.AsDateTime);
-        b.AddString("perms",      permsBytes ?? p ?? "");
+        b.AddString("perms",       permsBytes ?? p ?? "");
+        b.AddString("database_id", d   ?? "");
         return b;
     }
 

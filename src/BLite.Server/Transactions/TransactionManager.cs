@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using BLite;
 using BLite.Core;
 using BLite.Server.Auth;
@@ -18,73 +18,85 @@ public sealed class TransactionOptions
 }
 
 /// <summary>
-/// Manages explicit, token-scoped transactions on top of <see cref="BLiteEngine"/>.
+/// Manages explicit, token-scoped transactions across one or more
+/// <see cref="BLiteEngine"/> instances retrieved from <see cref="EngineRegistry"/>.
 ///
 /// <para>
 /// Because <see cref="BLiteEngine"/> serialises transactions internally with
-/// a <c>SemaphoreSlim(1,1)</c> there can only be <b>one active transaction</b>
-/// at a time.  <see cref="TransactionManager"/> enforces that invariant at the
-/// gRPC boundary: <see cref="BeginAsync"/> blocks until any current transaction
-/// is committed or rolled back.
+/// a <c>SemaphoreSlim(1,1)</c> there can only be <b>one active transaction
+/// per database</b> at a time.  <see cref="TransactionManager"/> enforces that
+/// invariant at the gRPC boundary with a per-database semaphore.
 /// </para>
 ///
 /// <para>
-/// The semaphore is acquired on <see cref="BeginAsync"/> and released only by
-/// <see cref="CommitAsync"/>, <see cref="RollbackAsync"/> or
-/// <see cref="CleanupExpiredAsync"/>.
+/// The per-database semaphore is acquired on <see cref="BeginAsync"/> and
+/// released only by <see cref="CommitAsync"/>, <see cref="RollbackAsync"/>
+/// or <see cref="CleanupExpiredAsync"/>.
 /// </para>
 /// </summary>
 public sealed class TransactionManager : IAsyncDisposable
 {
-    private readonly BLiteEngine             _engine;
-    private readonly int                     _timeoutSeconds;
+    private readonly EngineRegistry              _registry;
+    private readonly int                         _timeoutSeconds;
     private readonly ILogger<TransactionManager> _logger;
 
-    // The global lock that serialises begin/commit/rollback across callers.
-    private readonly SemaphoreSlim _lock = new(1, 1);
+    // Per-database lock: canonical database-id → SemaphoreSlim(1,1)
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _locks
+        = new(StringComparer.OrdinalIgnoreCase);
 
     // Active sessions keyed by token (UUID string).
     private readonly ConcurrentDictionary<string, TransactionSession> _sessions = new();
 
     public TransactionManager(
-        BLiteEngine                      engine,
+        EngineRegistry                   registry,
         IOptions<TransactionOptions>     opts,
         ILogger<TransactionManager>      logger)
     {
-        _engine         = engine;
+        _registry       = registry;
         _timeoutSeconds = opts.Value.TimeoutSeconds;
         _logger         = logger;
     }
+
+    // Returns (or lazily creates) the per-database semaphore.
+    private SemaphoreSlim GetLock(string databaseId)
+        => _locks.GetOrAdd(databaseId, _ => new SemaphoreSlim(1, 1));
 
     // ── Public API ────────────────────────────────────────────────────────────
 
     /// <summary>
     /// Begins a new transaction on behalf of <paramref name="owner"/>.
-    /// Blocks until any currently active transaction has been released.
+    /// Blocks until any currently active transaction on the same database has been released.
     /// </summary>
     /// <returns>The opaque <c>txn_id</c> to pass in subsequent write RPCs.</returns>
     public async Task<string> BeginAsync(BLiteUser owner, CancellationToken ct)
     {
-        // Acquire the global lock — NOT released here; released by Commit/Rollback/Cleanup.
-        await _lock.WaitAsync(ct);
+        // Resolve engine + canonical DB key for the semaphore
+        var dbId   = CanonicalDbId(owner.DatabaseId);
+        var engine = _registry.GetEngine(owner.DatabaseId);
+        var dbLock = GetLock(dbId);
+
+        // Acquire the per-database lock — NOT released here; released by Commit/Rollback/Cleanup.
+        await dbLock.WaitAsync(ct);
 
         try
         {
-            await _engine.BeginTransactionAsync(ct);
+            await engine.BeginTransactionAsync(ct);
 
             var txnId   = Guid.NewGuid().ToString("N");
-            var session = new TransactionSession(txnId, owner, _timeoutSeconds);
+            var session = new TransactionSession(txnId, owner, _timeoutSeconds, dbId, engine);
             _sessions[txnId] = session;
 
             BLiteMetrics.ActiveTransactions.Add(1);
-            _logger.LogInformation("Transaction {TxnId} started for user '{User}'.", txnId, owner.Username);
+            _logger.LogInformation(
+                "Transaction {TxnId} started for user '{User}' on database '{Db}'.",
+                txnId, owner.Username, dbId == "" ? "(default)" : dbId);
 
             return txnId;
         }
         catch
         {
             // If engine.Begin throws, release the lock so the server doesn't deadlock.
-            _lock.Release();
+            dbLock.Release();
             throw;
         }
     }
@@ -98,12 +110,12 @@ public sealed class TransactionManager : IAsyncDisposable
         var session = RemoveSession(txnId, caller);
         try
         {
-            await _engine.CommitAsync(ct);
+            await session.Engine.CommitAsync(ct);
             _logger.LogInformation("Transaction {TxnId} committed by '{User}'.", txnId, caller.Username);
         }
         finally
         {
-            _lock.Release();
+            GetLock(session.DatabaseId).Release();
         }
     }
 
@@ -114,7 +126,7 @@ public sealed class TransactionManager : IAsyncDisposable
     public Task RollbackAsync(string txnId, BLiteUser caller, CancellationToken ct)
     {
         var session = RemoveSession(txnId, caller);
-        return RollbackCoreAsync(txnId);
+        return RollbackCoreAsync(session);
     }
 
     /// <summary>
@@ -164,10 +176,13 @@ public sealed class TransactionManager : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        foreach (var txnId in _sessions.Keys)
+        foreach (var txnId in _sessions.Keys.ToList())
             await CleanupSessionAsync(txnId);
 
-        _lock.Dispose();
+        foreach (var sem in _locks.Values)
+            sem.Dispose();
+
+        _locks.Clear();
     }
 
     // ── Internals ─────────────────────────────────────────────────────────────
@@ -186,27 +201,34 @@ public sealed class TransactionManager : IAsyncDisposable
 
     private async Task CleanupSessionAsync(string txnId)
     {
-        if (!_sessions.TryRemove(txnId, out _)) return;
+        if (!_sessions.TryRemove(txnId, out var session)) return;
 
         BLiteMetrics.ActiveTransactions.Add(-1);
-        await RollbackCoreAsync(txnId);
+        await RollbackCoreAsync(session);
     }
 
-    private Task RollbackCoreAsync(string txnId)
+    private Task RollbackCoreAsync(TransactionSession session)
     {
         try
         {
-            _engine.Rollback();
-            _logger.LogInformation("Transaction {TxnId} rolled back.", txnId);
+            session.Engine.Rollback();
+            _logger.LogInformation("Transaction {TxnId} rolled back.", session.TxnId);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error rolling back transaction {TxnId}.", txnId);
+            _logger.LogError(ex, "Error rolling back transaction {TxnId}.", session.TxnId);
         }
         finally
         {
-            _lock.Release();
+            GetLock(session.DatabaseId).Release();
         }
         return Task.CompletedTask;
     }
+
+    /// <summary>
+    /// Normalises a database-id the same way <see cref="EngineRegistry"/> does so the
+    /// per-database semaphore key always matches the session key stored in the registry.
+    /// </summary>
+    private static string CanonicalDbId(string? id)
+        => string.IsNullOrWhiteSpace(id) ? "" : id.Trim().ToLowerInvariant();
 }

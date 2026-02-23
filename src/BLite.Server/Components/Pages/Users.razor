@@ -1,0 +1,218 @@
+@page "/users"
+@inject StudioService Studio
+@inject IJSRuntime JS
+
+<h1>Users</h1>
+
+@* ── Create user form ──────────────────────────────────────────────────── *@
+<div class="toolbar">
+    <input @bind="_newUsername"  placeholder="Username"           class="input" />
+    <input @bind="_newNamespace" placeholder="Namespace (optional)" class="input" />
+    <select @bind="_newDatabaseId" class="input">
+        <option value="">(default / system)</option>
+        @foreach (var t in _tenants)
+        {
+            <option value="@t.DatabaseId">@t.DatabaseId</option>
+        }
+    </select>
+    <button class="btn btn-primary" @onclick="CreateUser"
+            disabled="@string.IsNullOrWhiteSpace(_newUsername)">
+        Create
+    </button>
+</div>
+
+@if (!string.IsNullOrEmpty(_message))
+{
+    <div class="alert @(_isError ? "alert-error" : "alert-ok")">@_message</div>
+}
+
+@* ── Users table ───────────────────────────────────────────────────────── *@
+<div class="table-scroll">
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>Username</th>
+                <th>Namespace</th>
+                <th>Database</th>
+                <th>Active</th>
+                <th>Created</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var u in _users)
+            {
+                <tr class="@(!u.Active ? "row-inactive" : "")">
+                    <td class="mono">@u.Username</td>
+                    <td>@(u.Namespace ?? "—")</td>
+                    <td class="mono">@(u.DatabaseId ?? "(default)")</td>
+                    <td>
+                        <span class="badge @(u.Active ? "badge-active" : "badge-idle")">
+                            @(u.Active ? "Yes" : "No")
+                        </span>
+                    </td>
+                    <td>@u.CreatedAt.ToString("yyyy-MM-dd HH:mm")</td>
+                    <td>
+                        @if (!u.Username.Equals("root", StringComparison.OrdinalIgnoreCase))
+                        {
+                            @if (u.Active)
+                            {
+                                <button class="btn btn-small" @onclick="() => RotateKey(u.Username)">
+                                    Rotate Key
+                                </button>
+                                <button class="btn btn-small btn-danger" @onclick="() => Revoke(u.Username)">
+                                    Revoke
+                                </button>
+                            }
+                            <button class="btn btn-small btn-danger" @onclick="() => ConfirmDelete(u.Username)">
+                                Delete
+                            </button>
+                        }
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</div>
+
+@* ── API Key modal ──────────────────────────────────────────────────────── *@
+@if (_showKeyModal)
+{
+    <div class="modal-backdrop" @onclick="CloseModal">
+        <div class="modal" @onclick:stopPropagation>
+            <h2>🔑 Save your API Key</h2>
+            <p class="modal-warn">
+                ⚠️ This key is shown <strong>only once</strong> and cannot be recovered.
+                Copy it now and store it securely.
+            </p>
+            <div class="key-box">
+                <span class="mono">@_newApiKey</span>
+                <button class="btn btn-small" @onclick="CopyKey">Copy</button>
+            </div>
+            @if (_copied)
+            {
+                <p class="copy-ok">✓ Copied to clipboard</p>
+            }
+            <div class="modal-footer">
+                <button class="btn btn-primary" @onclick="CloseModal">I saved the key</button>
+            </div>
+        </div>
+    </div>
+}
+
+@* ── Delete confirm modal ───────────────────────────────────────────────── *@
+@if (_deleteTarget is not null)
+{
+    <div class="modal-backdrop" @onclick="CancelDelete">
+        <div class="modal" @onclick:stopPropagation>
+            <h2>⚠️ Confirm deletion</h2>
+            <p>Permanently delete user <strong class="mono">@_deleteTarget</strong>?
+               This cannot be undone.</p>
+            <div class="modal-footer">
+                <button class="btn btn-danger" @onclick="DeleteUser">Delete permanently</button>
+                <button class="btn" @onclick="CancelDelete">Cancel</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private IReadOnlyList<BLite.Server.Auth.BLiteUser> _users  = [];
+    private IReadOnlyList<TenantEntry>                 _tenants = [];
+    private string _newUsername   = "";
+    private string _newNamespace  = "";
+    private string _newDatabaseId = "";
+    private string _message       = "";
+    private bool   _isError;
+
+    // key modal
+    private bool   _showKeyModal;
+    private string _newApiKey = "";
+    private bool   _copied;
+
+    // delete confirm
+    private string? _deleteTarget;
+
+    protected override void OnInitialized() => Refresh();
+
+    private void Refresh()
+    {
+        _users   = Studio.ListUsers();
+        _tenants = Studio.ListTenants();
+    }
+
+    private async Task CreateUser()
+    {
+        try
+        {
+            var ns   = string.IsNullOrWhiteSpace(_newNamespace)  ? null : _newNamespace.Trim();
+            var dbId = string.IsNullOrWhiteSpace(_newDatabaseId) ? null : _newDatabaseId.Trim();
+            var key  = await Studio.CreateUserAsync(_newUsername.Trim(), ns, dbId);
+            _newApiKey     = key;
+            _showKeyModal  = true;
+            _copied        = false;
+            _message       = "";
+            _newUsername = _newNamespace = _newDatabaseId = "";
+            Refresh();
+        }
+        catch (Exception ex) { _message = ex.Message; _isError = true; }
+    }
+
+    private async Task Revoke(string username)
+    {
+        try
+        {
+            await Studio.RevokeUserAsync(username);
+            _message = $"User '{username}' revoked.";
+            _isError = false;
+            Refresh();
+        }
+        catch (Exception ex) { _message = ex.Message; _isError = true; }
+    }
+
+    private void ConfirmDelete(string username) => _deleteTarget = username;
+    private void CancelDelete()               => _deleteTarget = null;
+
+    private async Task DeleteUser()
+    {
+        if (_deleteTarget is null) return;
+        try
+        {
+            await Studio.DeleteUserAsync(_deleteTarget);
+            _message = $"User '{_deleteTarget}' deleted.";
+            _isError = false;
+            _deleteTarget = null;
+            Refresh();
+        }
+        catch (Exception ex) { _message = ex.Message; _isError = true; _deleteTarget = null; }
+    }
+
+    private async Task RotateKey(string username)
+    {
+        try
+        {
+            var key = await Studio.RotateKeyAsync(username);
+            if (key is not null)
+            {
+                _newApiKey    = key;
+                _showKeyModal = true;
+                _copied       = false;
+                _message      = "";
+            }
+            else
+            {
+                _message = $"User '{username}' not found.";
+                _isError = true;
+            }
+            Refresh();
+        }
+        catch (Exception ex) { _message = ex.Message; _isError = true; }
+    }
+
+    private void CloseModal() { _showKeyModal = false; _newApiKey = ""; }
+
+    private async Task CopyKey()
+    {
+        _copied = await JS.InvokeAsync<bool>("studioClipboard.copy", _newApiKey);
+    }
+}

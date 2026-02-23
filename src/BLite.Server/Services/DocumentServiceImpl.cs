@@ -1,6 +1,7 @@
-// BLite.Server � DocumentService implementation (typed path)
-// Copyright (C) 2026 Luca Fabbri � AGPL-3.0
+﻿// BLite.Server — DocumentService implementation (typed path)
+// Copyright (C) 2026 Luca Fabbri — AGPL-3.0
 
+using System.Collections.Concurrent;
 using BLite.Bson;
 using BLite.Core;
 using BLite.Proto;
@@ -17,21 +18,23 @@ namespace BLite.Server.Services;
 /// Implements the typed gRPC service endpoint.
 /// Write operations accept pre-serialized BSON (produced by the BLite client mapper).
 /// Read operations push projected bytes without deserializing T.
-/// Every method checks the caller's permission and applies namespace isolation.
+/// Every method checks the caller's permission, resolves the engine for the caller's
+/// database, and applies namespace isolation.
 /// </summary>
 public sealed class DocumentServiceImpl : DocumentService.DocumentServiceBase
 {
-    private readonly BLiteEngine               _engine;
-    private readonly AuthorizationService      _authz;
-    private readonly TransactionManager        _txnManager;
-    private readonly ILogger<DocumentServiceImpl> _logger;
+    private readonly EngineRegistry                _registry;
+    private readonly AuthorizationService          _authz;
+    private readonly TransactionManager            _txnManager;
+    private readonly ILogger<DocumentServiceImpl>  _logger;
 
     public DocumentServiceImpl(
-        BLiteEngine engine, AuthorizationService authz,
-        TransactionManager txnManager,
+        EngineRegistry       registry,
+        AuthorizationService authz,
+        TransactionManager   txnManager,
         ILogger<DocumentServiceImpl> logger)
     {
-        _engine     = engine;
+        _registry   = registry;
         _authz      = authz;
         _txnManager = txnManager;
         _logger     = logger;
@@ -57,13 +60,13 @@ public sealed class DocumentServiceImpl : DocumentService.DocumentServiceBase
                 $"Invalid QueryDescriptor: {ex.Message}"));
         }
 
-        var col = Authorize(context, descriptor.Collection, BLiteOperation.Query);
+        var (col, user) = AuthorizeWithUser(context, descriptor.Collection, BLiteOperation.Query);
         descriptor.Collection = col;
         var typeName = descriptor.Select?.ResultTypeName ?? string.Empty;
+        var engine   = _registry.GetEngine(user.DatabaseId);
         var ct       = context.CancellationToken;
 
-        await foreach (var doc in QueryDescriptorExecutor.ExecuteAsync(
-            _engine, descriptor, ct))
+        await foreach (var doc in QueryDescriptorExecutor.ExecuteAsync(engine, descriptor, ct))
         {
             var response = new TypedDocumentResponse
             {
@@ -80,18 +83,20 @@ public sealed class DocumentServiceImpl : DocumentService.DocumentServiceBase
         TypedInsertRequest request, ServerCallContext context)
     {
         var (col, user) = AuthorizeWithUser(context, request.Collection, BLiteOperation.Insert);
+        var engine      = _registry.GetEngine(user.DatabaseId);
         try
         {
-            var doc = BsonPayloadSerializer.Deserialize(request.BsonPayload.ToByteArray());
+            var reverseKeys = ReverseKeys(engine);
+            var doc = BsonPayloadSerializer.Deserialize(request.BsonPayload.ToByteArray(), reverseKeys);
             BsonId id;
             if (!string.IsNullOrEmpty(request.TransactionId))
             {
-                _txnManager.RequireSession(request.TransactionId, user);
-                id = await _engine.GetOrCreateCollection(col).InsertAsync(doc, context.CancellationToken);
+                var session = _txnManager.RequireSession(request.TransactionId, user);
+                id = await session.Engine.GetOrCreateCollection(col).InsertAsync(doc, context.CancellationToken);
             }
             else
             {
-                id = await _engine.InsertAsync(col, doc, context.CancellationToken);
+                id = await engine.InsertAsync(col, doc, context.CancellationToken);
             }
             return new InsertResponse { Id = BsonIdSerializer.ToProto(id) };
         }
@@ -109,19 +114,21 @@ public sealed class DocumentServiceImpl : DocumentService.DocumentServiceBase
         TypedUpdateRequest request, ServerCallContext context)
     {
         var (col, user) = AuthorizeWithUser(context, request.Collection, BLiteOperation.Update);
+        var engine      = _registry.GetEngine(user.DatabaseId);
         try
         {
+            var reverseKeys = ReverseKeys(engine);
             var id  = BsonIdSerializer.FromProto(request.Id);
-            var doc = BsonPayloadSerializer.Deserialize(request.BsonPayload.ToByteArray());
+            var doc = BsonPayloadSerializer.Deserialize(request.BsonPayload.ToByteArray(), reverseKeys);
             bool ok;
             if (!string.IsNullOrEmpty(request.TransactionId))
             {
-                _txnManager.RequireSession(request.TransactionId, user);
-                ok = await _engine.GetOrCreateCollection(col).UpdateAsync(id, doc, context.CancellationToken);
+                var session = _txnManager.RequireSession(request.TransactionId, user);
+                ok = await session.Engine.GetOrCreateCollection(col).UpdateAsync(id, doc, context.CancellationToken);
             }
             else
             {
-                ok = await _engine.UpdateAsync(col, id, doc, context.CancellationToken);
+                ok = await engine.UpdateAsync(col, id, doc, context.CancellationToken);
             }
             return new MutationResponse { Success = ok };
         }
@@ -139,18 +146,19 @@ public sealed class DocumentServiceImpl : DocumentService.DocumentServiceBase
         DeleteRequest request, ServerCallContext context)
     {
         var (col, user) = AuthorizeWithUser(context, request.Collection, BLiteOperation.Delete);
+        var engine      = _registry.GetEngine(user.DatabaseId);
         try
         {
             var id = BsonIdSerializer.FromProto(request.Id);
             bool ok;
             if (!string.IsNullOrEmpty(request.TransactionId))
             {
-                _txnManager.RequireSession(request.TransactionId, user);
-                ok = await _engine.GetOrCreateCollection(col).DeleteAsync(id, context.CancellationToken);
+                var session = _txnManager.RequireSession(request.TransactionId, user);
+                ok = await session.Engine.GetOrCreateCollection(col).DeleteAsync(id, context.CancellationToken);
             }
             else
             {
-                ok = await _engine.DeleteAsync(col, id, context.CancellationToken);
+                ok = await engine.DeleteAsync(col, id, context.CancellationToken);
             }
             return new MutationResponse { Success = ok };
         }
@@ -168,21 +176,23 @@ public sealed class DocumentServiceImpl : DocumentService.DocumentServiceBase
         TypedBulkInsertRequest request, ServerCallContext context)
     {
         var (col, user) = AuthorizeWithUser(context, request.Collection, BLiteOperation.Insert);
+        var engine      = _registry.GetEngine(user.DatabaseId);
         try
         {
+            var reverseKeys = ReverseKeys(engine);
             var docs = request.Payloads
-                .Select(p => BsonPayloadSerializer.Deserialize(p.ToByteArray()))
+                .Select(p => BsonPayloadSerializer.Deserialize(p.ToByteArray(), reverseKeys))
                 .ToList();
 
             List<BsonId> ids;
             if (!string.IsNullOrEmpty(request.TransactionId))
             {
-                _txnManager.RequireSession(request.TransactionId, user);
-                ids = await _engine.GetOrCreateCollection(col).InsertBulkAsync(docs, context.CancellationToken);
+                var session = _txnManager.RequireSession(request.TransactionId, user);
+                ids = await session.Engine.GetOrCreateCollection(col).InsertBulkAsync(docs, context.CancellationToken);
             }
             else
             {
-                ids = await _engine.InsertBulkAsync(col, docs, context.CancellationToken);
+                ids = await engine.InsertBulkAsync(col, docs, context.CancellationToken);
             }
             var response = new BulkInsertResponse();
             response.Ids.AddRange(ids.Select(BsonIdSerializer.ToProto));
@@ -206,7 +216,9 @@ public sealed class DocumentServiceImpl : DocumentService.DocumentServiceBase
         return (NamespaceResolver.Resolve(user, collection), user);
     }
 
-    private string Authorize(ServerCallContext ctx, string collection, BLiteOperation op)
-        => AuthorizeWithUser(ctx, collection, op).Col;
-}
+    // -- Engine helpers --------------------------------------------------------
 
+    /// <summary>Returns the engine's ushort→name reverse key map for BSON deserialization.</summary>
+    private static ConcurrentDictionary<ushort, string> ReverseKeys(BLiteEngine engine)
+        => (ConcurrentDictionary<ushort, string>)engine.GetKeyReverseMap();
+}

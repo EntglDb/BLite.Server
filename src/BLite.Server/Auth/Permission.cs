@@ -39,6 +39,10 @@ public sealed record PermissionEntry(string Collection, BLiteOperation Ops);
 /// Optional namespace prefix.  All collection names are transparently prefixed with
 /// <c>"&lt;Namespace&gt;:"</c> before hitting the engine.  <c>null</c> = root (no prefix).
 /// </param>
+/// <param name="DatabaseId">
+/// Optional database identifier.  Maps to a physical <see cref="BLiteEngine"/> in
+/// <see cref="BLite.Server.EngineRegistry"/>.  <c>null</c> = default (system) database.
+/// </param>
 /// <param name="Permissions">Per-collection operation grants.</param>
 /// <param name="Active">When <c>false</c> the key is revoked.</param>
 /// <param name="CreatedAt">UTC creation timestamp.</param>
@@ -50,4 +54,5 @@ public sealed record BLiteUser(
     IReadOnlyList<PermissionEntry> Permissions,
     bool                           Active,
     DateTime                       CreatedAt,
-    BsonId?                        StoredId = null);
+    BsonId?                        StoredId   = null,
+    string?                        DatabaseId = null);

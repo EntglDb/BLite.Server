@@ -1,0 +1,170 @@
+@page "/collections"
+@page "/collections/{DatabaseId}"
+@inject StudioService Studio
+
+<h1>Collections</h1>
+
+<div class="toolbar">
+    <label class="toolbar-label">Database:</label>
+    <select class="input" @onchange="OnDatabaseChanged">
+        <option value="">(default / system)</option>
+        @foreach (var t in _tenants)
+        {
+            <option value="@t.DatabaseId" selected="@(t.DatabaseId == DatabaseId)">@t.DatabaseId</option>
+        }
+    </select>
+</div>
+
+@if (!string.IsNullOrEmpty(_message))
+{
+    <div class="alert @(_isError ? "alert-error" : "alert-ok")">@_message</div>
+}
+
+@* ── Create collection ───────────────────────────────────────────────────── *@
+<details class="panel">
+    <summary class="panel-title">➕ Create collection</summary>
+    <div class="panel-body toolbar">
+        <input @bind="_newCollectionName" placeholder="Collection name" class="input" />
+        <button class="btn btn-primary" @onclick="CreateCollection"
+                disabled="@string.IsNullOrWhiteSpace(_newCollectionName)">
+            Create
+        </button>
+    </div>
+</details>
+
+@* ── Upload JSON document ────────────────────────────────────────────────── *@
+<details class="panel">
+    <summary class="panel-title">↑ Insert document (JSON)</summary>
+    <div class="panel-body">
+        <div class="toolbar">
+            <label class="toolbar-label">Collection:</label>
+            <input @bind="_uploadCollection" placeholder="Collection name (created if new)" class="input" style="min-width:220px" />
+        </div>
+        <textarea @bind="_uploadJson" class="json-editor"
+                  placeholder='{ "field": "value", ... }'></textarea>
+        <div class="toolbar" style="margin-top:8px">
+            <button class="btn btn-primary" @onclick="InsertDocument"
+                    disabled="@(string.IsNullOrWhiteSpace(_uploadCollection) || string.IsNullOrWhiteSpace(_uploadJson))">
+                Insert
+            </button>
+        </div>
+    </div>
+</details>
+
+@* ── Collections table ──────────────────────────────────────────────────── *@
+<div class="table-scroll">
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>Collection</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var c in _collections)
+            {
+                <tr>
+                    <td class="mono">@c.Name</td>
+                    <td>
+                        <a href="@DocumentsUrl(c.Name)" class="btn btn-small">Browse</a>
+                        <button class="btn btn-small btn-danger"
+                                @onclick="() => Drop(c.Name)">
+                            Drop
+                        </button>
+                    </td>
+                </tr>
+            }
+            @if (_collections.Count == 0)
+            {
+                <tr><td colspan="2" class="empty">No collections found.</td></tr>
+            }
+        </tbody>
+    </table>
+</div>
+
+@code {
+    [Parameter] public string? DatabaseId { get; set; }
+
+    private IReadOnlyList<TenantEntry> _tenants     = [];
+    private List<CollectionInfo>       _collections = [];
+    private string _message = "";
+    private bool   _isError;
+
+    // create collection
+    private string _newCollectionName = "";
+
+    // upload JSON
+    private string _uploadCollection = "";
+    private string _uploadJson       = "";
+
+    protected override void OnParametersSet() => Refresh();
+
+    private void Refresh()
+    {
+        _tenants = Studio.ListTenants();
+        try
+        {
+            _collections = Studio.ListCollections(DatabaseId);
+            _isError = false;
+        }
+        catch (Exception ex)
+        {
+            _collections = [];
+            _message = ex.Message;
+            _isError = true;
+        }
+    }
+
+    private void OnDatabaseChanged(ChangeEventArgs e)
+    {
+        DatabaseId = e.Value?.ToString();
+        if (string.IsNullOrEmpty(DatabaseId)) DatabaseId = null;
+        Refresh();
+    }
+
+    private string DocumentsUrl(string col)
+    {
+        var db = DatabaseId ?? "";
+        return $"/documents/{Uri.EscapeDataString(db)}/{Uri.EscapeDataString(col)}";
+    }
+
+    private async Task CreateCollection()
+    {
+        try
+        {
+            var name = _newCollectionName.Trim();
+            await Studio.EnsureCollectionAsync(DatabaseId, name);
+            _message = $"Collection '{name}' created.";
+            _isError = false;
+            _newCollectionName = "";
+            Refresh();
+        }
+        catch (Exception ex) { _message = ex.Message; _isError = true; }
+    }
+
+    private async Task InsertDocument()
+    {
+        try
+        {
+            var col = _uploadCollection.Trim();
+            var id  = await Studio.InsertDocumentFromJsonAsync(DatabaseId, col, _uploadJson.Trim());
+            _message = $"Document inserted into '{col}' with id {id}.";
+            _isError = false;
+            _uploadJson = "";
+            Refresh();
+        }
+        catch (Exception ex) { _message = ex.Message; _isError = true; }
+    }
+
+    private void Drop(string col)
+    {
+        try
+        {
+            Studio.DropCollection(DatabaseId, col);
+            _message = $"Collection '{col}' dropped.";
+            _isError = false;
+            Refresh();
+        }
+        catch (Exception ex) { _message = ex.Message; _isError = true; }
+    }
+}

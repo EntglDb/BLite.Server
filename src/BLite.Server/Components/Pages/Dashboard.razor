@@ -1,0 +1,58 @@
+@page "/"
+@inject StudioService Studio
+
+<h1>Dashboard</h1>
+
+@if (_info is null)
+{
+    <p class="loading">Loading…</p>
+}
+else
+{
+    <div class="card-grid">
+        <div class="card">
+            <div class="card-label">Engine Version</div>
+            <div class="card-value">@_info.Version</div>
+        </div>
+        <div class="card">
+            <div class="card-label">Uptime</div>
+            <div class="card-value">@FormatUptime(_info.Uptime)</div>
+        </div>
+        <div class="card">
+            <div class="card-label">Tenants</div>
+            <div class="card-value">@_info.TenantCount</div>
+        </div>
+        <div class="card">
+            <div class="card-label">Users</div>
+            <div class="card-value">@_info.UserCount</div>
+        </div>
+        <div class="card full-width">
+            <div class="card-label">Databases Directory</div>
+            <div class="card-value mono">@_info.DatabasesDir</div>
+        </div>
+        <div class="card full-width card-source">
+            <div class="card-label">Source Code (AGPL-3.0 §13)</div>
+            <div class="card-value">
+                <a href="@_info.SourceUrl" target="_blank" rel="noopener noreferrer" class="source-link">
+                    @_info.SourceUrl
+                </a>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private ServerInfo? _info;
+
+    protected override void OnInitialized()
+    {
+        _info = Studio.GetServerInfo();
+    }
+
+    private static string FormatUptime(TimeSpan ts)
+    {
+        if (ts.TotalDays >= 1) return $"{(int)ts.TotalDays}d {ts.Hours}h {ts.Minutes}m";
+        if (ts.TotalHours >= 1) return $"{(int)ts.TotalHours}h {ts.Minutes}m";
+        return $"{(int)ts.TotalMinutes}m {ts.Seconds}s";
+    }
+}

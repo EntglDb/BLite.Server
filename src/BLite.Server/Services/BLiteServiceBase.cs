@@ -12,16 +12,16 @@ namespace BLite.Server.Services;
 /// </summary>
 public abstract class BLiteServiceBase
 {
-    protected readonly BLiteEngine         _engine;
+    protected readonly EngineRegistry   _registry;
     protected readonly AuthorizationService _authz;
     protected readonly ILogger             _logger;
 
     protected BLiteServiceBase(
-        BLiteEngine engine, AuthorizationService authz, ILogger logger)
+        EngineRegistry registry, AuthorizationService authz, ILogger logger)
     {
-        _engine = engine;
-        _authz  = authz;
-        _logger = logger;
+        _registry = registry;
+        _authz    = authz;
+        _logger   = logger;
     }
 
     /// <summary>
@@ -32,6 +32,12 @@ public abstract class BLiteServiceBase
         => ctx.GetHttpContext().Items[nameof(BLiteUser)] as BLiteUser
            ?? throw new RpcException(new Status(
                StatusCode.Unauthenticated, "Request carries no valid API key."));
+
+    /// <summary>
+    /// Returns the <see cref="BLiteEngine"/> for the authenticated user's database.
+    /// </summary>
+    protected BLiteEngine GetEngine(BLiteUser user)
+        => _registry.GetEngine(user.DatabaseId);
 
     /// <summary>
     /// Verifies that the caller holds <paramref name="op"/> permission on

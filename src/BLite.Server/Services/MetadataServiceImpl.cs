@@ -18,18 +18,18 @@ namespace BLite.Server.Services;
 /// </summary>
 public sealed class MetadataServiceImpl : MetadataService.MetadataServiceBase
 {
-    private readonly BLiteEngine                  _engine;
+    private readonly EngineRegistry               _registry;
     private readonly AuthorizationService         _authz;
     private readonly ILogger<MetadataServiceImpl> _logger;
 
     public MetadataServiceImpl(
-        BLiteEngine engine,
+        EngineRegistry       registry,
         AuthorizationService authz,
         ILogger<MetadataServiceImpl> logger)
     {
-        _engine = engine;
-        _authz  = authz;
-        _logger = logger;
+        _registry = registry;
+        _authz    = authz;
+        _logger   = logger;
     }
 
     // ── GetKeyMap ─────────────────────────────────────────────────────────────
@@ -45,8 +45,9 @@ public sealed class MetadataServiceImpl : MetadataService.MetadataServiceBase
         {
             var user = BLiteServiceBase.GetCurrentUser(context);
             _authz.RequirePermission(user, request.Collection, BLiteOperation.Query);
+            var engine = _registry.GetEngine(user.DatabaseId);
 
-            var map    = _engine.GetKeyMap();
+            var map    = engine.GetKeyMap();
             var result = new KeyMapResponse();
             foreach (var (name, id) in map)
                 result.Entries[name] = id;
@@ -83,15 +84,16 @@ public sealed class MetadataServiceImpl : MetadataService.MetadataServiceBase
         {
             var user = BLiteServiceBase.GetCurrentUser(context);
             _authz.RequirePermission(user, request.Collection, BLiteOperation.Insert);
+            var engine = _registry.GetEngine(user.DatabaseId);
 
             if (request.Keys.Count == 0)
                 return Task.FromResult(new KeyMapResponse());
 
             // Register on the server (idempotent — assigns IDs to new names only)
-            _engine.RegisterKeys(request.Keys);
+            engine.RegisterKeys(request.Keys);
 
             // Build response with the IDs of the requested keys only
-            var map    = _engine.GetKeyMap();
+            var map    = engine.GetKeyMap();
             var result = new KeyMapResponse();
             foreach (var key in request.Keys)
             {

@@ -224,11 +224,15 @@ message KeyMapResponse {
 // User and permission management.  All RPCs require a caller with Admin permission.
 
 service AdminService {
-  rpc CreateUser   (CreateUserRequest)        returns (CreateUserResponse);
-  rpc RevokeUser   (UsernameRequest)          returns (MutationResponse);
-  rpc RotateKey    (UsernameRequest)          returns (RotateKeyResponse);
-  rpc ListUsers    (Empty)                    returns (ListUsersResponse);
-  rpc UpdatePerms  (UpdatePermsRequest)       returns (MutationResponse);
+  rpc CreateUser        (CreateUserRequest)        returns (CreateUserResponse);
+  rpc RevokeUser        (UsernameRequest)          returns (MutationResponse);
+  rpc RotateKey         (UsernameRequest)          returns (RotateKeyResponse);
+  rpc ListUsers         (Empty)                    returns (ListUsersResponse);
+  rpc UpdatePerms       (UpdatePermsRequest)       returns (MutationResponse);
+  // Tenant provisioning (hot — no restart required)
+  rpc ProvisionTenant   (ProvisionTenantRequest)   returns (ProvisionTenantResponse);
+  rpc DeprovisionTenant (DeprovisionTenantRequest) returns (DeprovisionTenantResponse);
+  rpc ListTenants       (Empty)                    returns (ListTenantsResponse);
 }
 
 // ─── AdminService messages ────────────────────────────────────────────────────
@@ -242,6 +246,7 @@ message CreateUserRequest {
   string                  username    = 1;
   string                  namespace   = 2;  // empty = root namespace
   repeated UserPermission permissions = 3;
+  string                  database_id = 4;  // empty = default (system) database
 }
 
 message CreateUserResponse {
@@ -264,6 +269,7 @@ message UserInfo {
   bool                    active      = 3;
   string                  created_at  = 4;  // ISO-8601 UTC
   repeated UserPermission permissions = 5;
+  string                  database_id = 6;  // empty = default (system) database
 }
 
 message ListUsersResponse {
@@ -274,6 +280,38 @@ message ListUsersResponse {
 message UpdatePermsRequest {
   string                  username    = 1;
   repeated UserPermission permissions = 2;
+}
+
+// ─── Tenant provisioning messages ────────────────────────────────────────────
+
+message ProvisionTenantRequest {
+  string database_id = 1;  // new tenant identifier (lowercased, unique)
+}
+
+message ProvisionTenantResponse {
+  bool   success = 1;
+  string error   = 2;
+}
+
+message DeprovisionTenantRequest {
+  string database_id  = 1;
+  bool   delete_files = 2;  // GDPR: physically delete the .db file from disk
+}
+
+message DeprovisionTenantResponse {
+  bool   success = 1;
+  string error   = 2;
+}
+
+message TenantInfo {
+  string database_id   = 1;
+  string database_path = 2;
+  bool   is_active     = 3;  // true = engine currently open in memory
+}
+
+message ListTenantsResponse {
+  repeated TenantInfo tenants = 1;
+  string              error   = 2;
 }
 
 // ─── TransactionService ───────────────────────────────────────────────────────

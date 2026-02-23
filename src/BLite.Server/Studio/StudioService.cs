@@ -1,0 +1,242 @@
+// BLite.Server — StudioService (Blazor Server façade)
+// Copyright (C) 2026 Luca Fabbri — AGPL-3.0
+//
+// In-process façade over EngineRegistry + UserRepository.
+// Injected as Scoped into Blazor components — no gRPC hop needed.
+
+using System.Collections.Concurrent;
+using System.Diagnostics;
+using System.Text.Json;
+using BLite.Bson;
+using BLite.Core;
+using BLite.Server.Auth;
+using Microsoft.Extensions.Configuration;
+
+namespace BLite.Server.Studio;
+
+/// <summary>
+/// Provides all operations the Studio UI needs, calling the BLite services
+/// directly in-process (no gRPC round-trip).
+/// </summary>
+public sealed class StudioService
+{
+    private readonly EngineRegistry _registry;
+    private readonly UserRepository _users;
+    private readonly string _sourceUrl;
+
+    public StudioService(EngineRegistry registry, UserRepository users, IConfiguration config)
+    {
+        _registry  = registry;
+        _users     = users;
+        _sourceUrl = config.GetValue<string>("License:SourceUrl")
+                     ?? "https://github.com/blitedb/BLite.Server";
+    }
+
+    /// <summary>
+    /// Returns the URL where the complete corresponding source code can be obtained,
+    /// as required by AGPL-3.0 §13 (network use disclosure).
+    /// </summary>
+    public string GetSourceUrl() => _sourceUrl;
+
+    // ── Server info ───────────────────────────────────────────────────────────
+
+    public ServerInfo GetServerInfo() => new(
+        Version:       typeof(BLiteEngine).Assembly.GetName().Version?.ToString() ?? "0.0.0",
+        Uptime:        DateTime.UtcNow - Process.GetCurrentProcess().StartTime.ToUniversalTime(),
+        TenantCount:   _registry.ListTenants().Count,
+        UserCount:     _users.ListAll().Count,
+        DatabasesDir:  _registry.DatabasesDirectory,
+        SourceUrl:     _sourceUrl);
+
+    // ── Tenants ───────────────────────────────────────────────────────────────
+
+    public IReadOnlyList<TenantEntry> ListTenants() => _registry.ListTenants();
+
+    public async Task ProvisionAsync(string databaseId)
+        => await _registry.ProvisionAsync(databaseId);
+
+    public async Task DeprovisionAsync(string databaseId, bool deleteFiles)
+        => await _registry.DeprovisionAsync(databaseId, deleteFiles);
+
+    // ── Users ─────────────────────────────────────────────────────────────────
+
+    public IReadOnlyList<BLiteUser> ListUsers() => _users.ListAll();
+
+    public async Task<string> CreateUserAsync(
+        string username, string? ns, string? databaseId)
+    {
+        var perms = new List<PermissionEntry>
+        {
+            new("*", BLiteOperation.All)
+        };
+        var (_, plainKey) = await _users.CreateAsync(username, ns, perms, databaseId);
+        return plainKey;
+    }
+
+    public Task RevokeUserAsync(string username)   => _users.RevokeAsync(username);
+    public Task<bool> DeleteUserAsync(string username) => _users.DeleteUserAsync(username);
+
+    public async Task<string?> RotateKeyAsync(string username)
+        => await _users.RotateKeyAsync(username);
+
+    // ── Collections ───────────────────────────────────────────────────────────
+
+    public List<CollectionInfo> ListCollections(string? databaseId)
+    {
+        var engine = _registry.GetEngine(databaseId);
+        return engine.ListCollections()
+            .Where(n => !n.StartsWith("_")) // hide internal collections
+            .Select(n => new CollectionInfo(n))
+            .ToList();
+    }
+
+    public bool DropCollection(string? databaseId, string collection)
+    {
+        var engine = _registry.GetEngine(databaseId);
+        return engine.DropCollection(collection);
+    }
+
+    /// <summary>
+    /// Parses a JSON string and inserts the resulting document into the specified collection.
+    /// The collection is created automatically if it does not exist.
+    /// Returns the assigned BsonId.
+    /// </summary>
+    public async Task<BsonId> InsertDocumentFromJsonAsync(
+        string? databaseId, string collection, string json,
+        CancellationToken ct = default)
+    {
+        var engine     = _registry.GetEngine(databaseId);
+        var keyMap     = (ConcurrentDictionary<string, ushort>)engine.GetKeyMap();
+        var reverseMap = (ConcurrentDictionary<ushort, string>)engine.GetKeyReverseMap();
+        var doc        = BsonJsonConverter.FromJson(json, keyMap, reverseMap);
+        return await engine.InsertAsync(collection, doc, ct);
+    }
+
+    /// <summary>
+    /// Ensures a collection exists (creates it if absent).
+    /// New collections appear in ListCollections only after at least one document is stored.
+    /// This method inserts a tiny marker document immediately so the collection is visible.
+    /// The marker has __studio_init = true and can be deleted by the user.
+    /// </summary>
+    public async Task EnsureCollectionAsync(string? databaseId, string collectionName,
+        CancellationToken ct = default)
+    {
+        var engine = _registry.GetEngine(databaseId);
+        var col    = engine.GetOrCreateCollection(collectionName);
+        // A bare GetOrCreateCollection won't persist; insert + delete is the canonical way
+        // to materialise an empty-looking collection.
+        var doc = col.CreateDocument(["__studio_init"], b => b.AddBoolean("__studio_init", true));
+        var id  = await col.InsertAsync(doc, ct);
+        await col.DeleteAsync(id, ct);
+    }
+
+    private static void AppendJsonProperty(BsonDocumentBuilder b, string name, JsonElement el)
+    {
+        switch (el.ValueKind)
+        {
+            case JsonValueKind.String:
+                // Try parse as DateTime
+                if (el.TryGetDateTime(out var dt))  { b.AddDateTime(name, dt);          break; }
+                if (Guid.TryParse(el.GetString(), out var g)) { b.AddGuid(name, g);     break; }
+                b.AddString(name, el.GetString()!);
+                break;
+            case JsonValueKind.Number:
+                if (el.TryGetInt64(out var l))        { b.AddInt64(name, l);             break; }
+                b.AddDouble(name, el.GetDouble());
+                break;
+            case JsonValueKind.True:  b.AddBoolean(name, true);  break;
+            case JsonValueKind.False: b.AddBoolean(name, false); break;
+            case JsonValueKind.Null:  b.AddNull(name);            break;
+            default: // Object or Array → store as JSON string for now
+                b.AddString(name, el.GetRawText());
+                break;
+        }
+    }
+
+    public async Task<List<DocumentRow>> GetDocumentsAsync(
+        string? databaseId, string collection, int skip, int take,
+        CancellationToken ct = default)
+    {
+        var engine = _registry.GetEngine(databaseId);
+        var col    = engine.GetOrCreateCollection(collection);
+        var rows   = new List<DocumentRow>();
+        int index  = 0;
+
+        await foreach (var doc in col.FindAllAsync(ct))
+        {
+            if (index++ < skip) continue;
+            if (rows.Count >= take) break;
+
+            rows.Add(DocumentToRow(doc));
+        }
+
+        return rows;
+    }
+
+    public async Task<int> CountDocumentsAsync(
+        string? databaseId, string collection, CancellationToken ct = default)
+    {
+        var engine = _registry.GetEngine(databaseId);
+        var col    = engine.GetOrCreateCollection(collection);
+        int count  = 0;
+        await foreach (var _ in col.FindAllAsync(ct))
+            count++;
+        return count;
+    }
+
+    public async Task<bool> DeleteDocumentAsync(
+        string? databaseId, string collection, BsonId id,
+        CancellationToken ct = default)
+    {
+        var engine = _registry.GetEngine(databaseId);
+        return await engine.DeleteAsync(collection, id, ct);
+    }
+
+    // ── Helpers ────────────────────────────────────────────────────────────────
+
+    private static DocumentRow DocumentToRow(BsonDocument doc)
+    {
+        // Build a dictionary of field→string for display
+        var fields = new Dictionary<string, string>();
+
+        doc.TryGetId(out var id);
+
+        foreach (var (name, val) in doc.EnumerateFields())
+        {
+            if (name == "_id") continue;
+            fields[name] = FormatValue(val);
+        }
+
+        return new DocumentRow(id, fields);
+    }
+
+    private static string FormatValue(BsonValue val)
+    {
+        if (val.IsNull)     return "null";
+        if (val.IsString)   return val.AsString;
+        if (val.IsInt32)    return val.AsInt32.ToString();
+        if (val.IsInt64)    return val.AsInt64.ToString();
+        if (val.IsDouble)   return val.AsDouble.ToString("G");
+        if (val.IsBoolean)  return val.AsBoolean ? "true" : "false";
+        if (val.IsDateTime) return val.AsDateTime.ToString("O");
+        if (val.IsObjectId) return val.AsObjectId.ToString();
+        if (val.IsCoordinates) return $"({val.AsCoordinates.Lat}, {val.AsCoordinates.Lon})";
+        if (val.IsArray)    return $"[{string.Join(", ", val.AsArray.Select(FormatValue))}]";
+        if (val.IsDocument) return "{...}";
+        if (val.IsBinary)   return $"<binary {val.AsBinary.Length} bytes>";
+        if (val.IsDecimal)  return val.AsDecimal.ToString("G");
+        if (val.IsGuid)     return val.AsGuid.ToString();
+        if(val.IsTimestamp) return val.AsTimestamp.ToString("O");
+        return val.ToString() ?? "???";
+    }
+}
+
+// ── DTOs ──────────────────────────────────────────────────────────────────────
+
+public sealed record ServerInfo(
+    string Version, TimeSpan Uptime, int TenantCount, int UserCount, string DatabasesDir,
+    string SourceUrl);
+
+public sealed record CollectionInfo(string Name);
+
+public sealed record DocumentRow(BsonId Id, Dictionary<string, string> Fields);

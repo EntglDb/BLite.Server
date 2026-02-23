@@ -1,0 +1,118 @@
+@page "/tenants"
+@inject StudioService Studio
+
+<h1>Tenants</h1>
+
+<div class="toolbar">
+    <input @bind="_newId" placeholder="New tenant ID" class="input" />
+    <button class="btn btn-primary" @onclick="Provision" disabled="@string.IsNullOrWhiteSpace(_newId)">
+        Provision
+    </button>
+</div>
+
+@if (!string.IsNullOrEmpty(_message))
+{
+    <div class="alert @(_isError ? "alert-error" : "alert-ok")">@_message</div>
+}
+
+<table class="data-table">
+    <thead>
+        <tr>
+            <th>Database ID</th>
+            <th>Path</th>
+            <th>Status</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        @foreach (var t in _tenants)
+        {
+            <tr>
+                <td class="mono">@t.DatabaseId</td>
+                <td class="mono">@t.DatabasePath</td>
+                <td>
+                    <span class="badge @(t.IsActive ? "badge-active" : "badge-idle")">
+                        @(t.IsActive ? "Active" : "Idle")
+                    </span>
+                </td>
+                <td>
+                    <button class="btn btn-small btn-danger"
+                            @onclick="() => Deprovision(t.DatabaseId)">
+                        Deprovision
+                    </button>
+                    <button class="btn btn-small btn-danger"
+                            @onclick="() => Erase(t.DatabaseId)">
+                        GDPR Erase
+                    </button>
+                </td>
+            </tr>
+        }
+        @if (_tenants.Count == 0)
+        {
+            <tr><td colspan="4" class="empty">No tenant databases found.</td></tr>
+        }
+    </tbody>
+</table>
+
+@code {
+    private IReadOnlyList<TenantEntry> _tenants = [];
+    private string _newId = "";
+    private string _message = "";
+    private bool _isError;
+
+    protected override void OnInitialized() => Refresh();
+
+    private void Refresh()
+    {
+        _tenants = Studio.ListTenants();
+    }
+
+    private async Task Provision()
+    {
+        try
+        {
+            await Studio.ProvisionAsync(_newId.Trim());
+            _message = $"Tenant '{_newId.Trim()}' provisioned.";
+            _isError = false;
+            _newId = "";
+            Refresh();
+        }
+        catch (Exception ex)
+        {
+            _message = ex.Message;
+            _isError = true;
+        }
+    }
+
+    private async Task Deprovision(string id)
+    {
+        try
+        {
+            await Studio.DeprovisionAsync(id, deleteFiles: false);
+            _message = $"Tenant '{id}' deprovisioned (file kept).";
+            _isError = false;
+            Refresh();
+        }
+        catch (Exception ex)
+        {
+            _message = ex.Message;
+            _isError = true;
+        }
+    }
+
+    private async Task Erase(string id)
+    {
+        try
+        {
+            await Studio.DeprovisionAsync(id, deleteFiles: true);
+            _message = $"Tenant '{id}' erased (file deleted — GDPR).";
+            _isError = false;
+            Refresh();
+        }
+        catch (Exception ex)
+        {
+            _message = ex.Message;
+            _isError = true;
+        }
+    }
+}

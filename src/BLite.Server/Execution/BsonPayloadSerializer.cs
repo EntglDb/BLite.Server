@@ -5,6 +5,7 @@
 // BsonDocument stores raw BSON data internally (accessible via RawData).
 // Construction from bytes is handled directly by the BsonDocument constructor.
 
+using System.Collections.Concurrent;
 using BLite.Bson;
 
 namespace BLite.Server.Execution;
@@ -22,7 +23,23 @@ public static class BsonPayloadSerializer
     public static BsonDocument Deserialize(byte[] bytes) =>
         new BsonDocument(bytes);
 
+    /// <summary>
+    /// Deserializes raw BSON bytes into a <see cref="BsonDocument"/> using the
+    /// engine's global reverse key map so that field IDs can be resolved.
+    /// </summary>
+    public static BsonDocument Deserialize(
+        byte[] bytes, ConcurrentDictionary<ushort, string> reverseKeys) =>
+        new BsonDocument(bytes, reverseKeys);
+
     /// <summary>Deserializes raw BSON bytes into a <see cref="BsonDocument"/>.</summary>
     public static BsonDocument Deserialize(ReadOnlySpan<byte> bytes) =>
         new BsonDocument(bytes.ToArray());
+
+    /// <summary>
+    /// Deserializes raw BSON bytes into a <see cref="BsonDocument"/> using the
+    /// engine's global reverse key map so that field IDs can be resolved.
+    /// </summary>
+    public static BsonDocument Deserialize(
+        ReadOnlySpan<byte> bytes, ConcurrentDictionary<ushort, string> reverseKeys) =>
+        new BsonDocument(bytes.ToArray(), reverseKeys);
 }

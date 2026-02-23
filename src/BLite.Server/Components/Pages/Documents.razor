@@ -1,0 +1,119 @@
+@page "/documents/{DatabaseId}/{Collection}"
+@inject StudioService Studio
+
+<h1>Documents — <span class="mono">@Collection</span></h1>
+<p class="subtitle">Database: <span class="mono">@(string.IsNullOrEmpty(DatabaseId) ? "(default)" : DatabaseId)</span></p>
+
+@if (!string.IsNullOrEmpty(_message))
+{
+    <div class="alert @(_isError ? "alert-error" : "alert-ok")">@_message</div>
+}
+
+<div class="toolbar">
+    <span class="toolbar-label">Showing @_rows.Count of @_totalCount documents</span>
+    <button class="btn btn-small" disabled="@(_page <= 0)" @onclick="PrevPage">◀ Prev</button>
+    <span class="toolbar-label">Page @(_page + 1)</span>
+    <button class="btn btn-small" disabled="@(!_hasNext)" @onclick="NextPage">Next ▶</button>
+</div>
+
+@if (_rows.Count > 0)
+{
+    <div class="table-scroll">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>_id</th>
+                    @foreach (var col in _columns)
+                    {
+                        <th>@col</th>
+                    }
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var row in _rows)
+                {
+                    <tr>
+                        <td class="mono">@FormatId(row.Id)</td>
+                        @foreach (var col in _columns)
+                        {
+                            <td>@(row.Fields.GetValueOrDefault(col, ""))</td>
+                        }
+                        <td>
+                            <button class="btn btn-small btn-danger"
+                                    @onclick="() => Delete(row.Id)">
+                                Delete
+                            </button>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+else
+{
+    <p class="empty">No documents in this collection.</p>
+}
+
+@code {
+    [Parameter] public string DatabaseId { get; set; } = "";
+    [Parameter] public string Collection { get; set; } = "";
+
+    private const int PageSize = 50;
+
+    private List<DocumentRow> _rows = [];
+    private List<string> _columns = [];
+    private int _totalCount;
+    private int _page;
+    private bool _hasNext;
+    private string _message = "";
+    private bool _isError;
+
+    protected override async Task OnParametersSetAsync() => await LoadPage();
+
+    private async Task LoadPage()
+    {
+        try
+        {
+            var dbId = string.IsNullOrEmpty(DatabaseId) ? null : Uri.UnescapeDataString(DatabaseId);
+            var col  = Uri.UnescapeDataString(Collection);
+
+            _totalCount = await Studio.CountDocumentsAsync(dbId, col);
+            _rows = await Studio.GetDocumentsAsync(dbId, col, _page * PageSize, PageSize);
+            _hasNext = (_page + 1) * PageSize < _totalCount;
+
+            // Compute union of all field names across returned rows
+            _columns = _rows
+                .SelectMany(r => r.Fields.Keys)
+                .Distinct()
+                .OrderBy(k => k)
+                .ToList();
+
+            _isError = false;
+        }
+        catch (Exception ex)
+        {
+            _message = ex.Message;
+            _isError = true;
+        }
+    }
+
+    private async Task PrevPage() { _page = Math.Max(0, _page - 1); await LoadPage(); }
+    private async Task NextPage() { _page++; await LoadPage(); }
+
+    private async Task Delete(BLite.Bson.BsonId id)
+    {
+        try
+        {
+            var dbId = string.IsNullOrEmpty(DatabaseId) ? null : Uri.UnescapeDataString(DatabaseId);
+            await Studio.DeleteDocumentAsync(dbId, Uri.UnescapeDataString(Collection), id);
+            _message = "Document deleted.";
+            _isError = false;
+            await LoadPage();
+        }
+        catch (Exception ex) { _message = ex.Message; _isError = true; }
+    }
+
+    private static string FormatId(BLite.Bson.BsonId id) => id.ToString() ?? "?";
+}

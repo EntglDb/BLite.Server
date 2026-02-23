@@ -1,0 +1,20 @@
+@inherits LayoutComponentBase
+@inject StudioService Studio
+
+<div class="studio-root">
+    <nav class="studio-sidebar">
+        <div class="studio-brand">
+            <span class="brand-icon">◆</span> BLite Studio
+        </div>
+        <StudioNavMenu />
+        <div class="sidebar-footer">
+            <a href="@Studio.GetSourceUrl()" target="_blank" rel="noopener noreferrer"
+               class="source-badge" title="Source code — AGPL-3.0 §13">
+                🔓 Source Code
+            </a>
+        </div>
+    </nav>
+    <main class="studio-main">
+        @Body
+    </main>
+</div>
