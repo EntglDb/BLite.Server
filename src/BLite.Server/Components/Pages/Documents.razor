@@ -1,4 +1,4 @@
-@page "/documents/{DatabaseId}/{Collection}"
+@page "/documents/{Collection}"
 @inject StudioService Studio
 
 <h1>Documents — <span class="mono">@Collection</span></h1>
@@ -57,7 +57,7 @@ else
 }
 
 @code {
-    [Parameter] public string DatabaseId { get; set; } = "";
+    [Parameter, SupplyParameterFromQuery(Name = "db")] public string? DatabaseId { get; set; }
     [Parameter] public string Collection { get; set; } = "";
 
     private const int PageSize = 50;

@@ -124,8 +124,10 @@
 
     private string DocumentsUrl(string col)
     {
-        var db = DatabaseId ?? "";
-        return $"/documents/{Uri.EscapeDataString(db)}/{Uri.EscapeDataString(col)}";
+        var colEncoded = Uri.EscapeDataString(col);
+        if (string.IsNullOrEmpty(DatabaseId))
+            return $"/documents/{colEncoded}";
+        return $"/documents/{colEncoded}?db={Uri.EscapeDataString(DatabaseId)}";
     }
 
     private async Task CreateCollection()
