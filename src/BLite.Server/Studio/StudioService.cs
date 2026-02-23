@@ -82,6 +82,17 @@ public sealed class StudioService
     public Task RevokeUserAsync(string username)   => _users.RevokeAsync(username);
     public Task<bool> DeleteUserAsync(string username) => _users.DeleteUserAsync(username);
 
+    /// <summary>Returns the user record by username, or null if not found.</summary>
+    public BLiteUser? GetUser(string username)
+        => _users.ListAll().FirstOrDefault(u =>
+               u.Username.Equals(username, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>Replaces the permission list for a user.</summary>
+    public Task<bool> UpdatePermissionsAsync(
+        string username, IReadOnlyList<PermissionEntry> perms,
+        CancellationToken ct = default)
+        => _users.UpdatePermissionsAsync(username, perms, ct);
+
     /// <summary>
     /// Completes the setup wizard: sets the root key and persists the setup-complete marker.
     /// After this call <see cref="IsSetupComplete"/> returns true and the wizard is no
