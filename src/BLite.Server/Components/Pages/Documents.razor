@@ -1,8 +1,16 @@
 @page "/documents/{Collection}"
 @inject StudioService Studio
 
-<h1>Documents — <span class="mono">@Collection</span></h1>
-<p class="subtitle">Database: <span class="mono">@(string.IsNullOrEmpty(DatabaseId) ? "(default)" : DatabaseId)</span></p>
+<div class="breadcrumb">
+    <a href="@CollectionsUrl" class="breadcrumb-link">▤ Collections</a>
+    <span class="breadcrumb-sep">›</span>
+    <span class="mono">@Collection</span>
+    @if (!string.IsNullOrEmpty(DatabaseId))
+    {
+        <span class="breadcrumb-db">(@DatabaseId)</span>
+    }
+</div>
+<h1>Documents</h1>
 
 @if (!string.IsNullOrEmpty(_message))
 {
@@ -116,4 +124,9 @@ else
     }
 
     private static string FormatId(BLite.Bson.BsonId id) => id.ToString() ?? "?";
+
+    private string CollectionsUrl =>
+        string.IsNullOrEmpty(DatabaseId)
+            ? "/collections"
+            : $"/collections/{Uri.EscapeDataString(DatabaseId)}";
 }
