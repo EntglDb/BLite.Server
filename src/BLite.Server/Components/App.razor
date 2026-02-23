@@ -4,12 +4,18 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>BLite Studio</title>
-    <link rel="stylesheet" href="css/studio.css" />
+    <link rel="stylesheet" href="css/studio.css?v=@_v" />
     <HeadOutlet @rendermode="InteractiveServer" />
 </head>
 <body>
     <Routes @rendermode="InteractiveServer" />
     <script src="_framework/blazor.web.js"></script>
-    <script src="js/studio.js"></script>
+    <script src="js/studio.js?v=@_v"></script>
 </body>
 </html>
+
+@code {
+    // Append assembly version as cache-buster — changes on every new build/release.
+    private static readonly string _v =
+        typeof(App).Assembly.GetName().Version?.ToString() ?? "0";
+}
