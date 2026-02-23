@@ -1,0 +1,166 @@
+@page "/setup"
+@layout SetupLayout
+@rendermode InteractiveServer
+@inject StudioService Studio
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+
+<div class="setup-card">
+
+    @if (_done)
+    {
+        <!-- Step 3 — Complete -->
+        <div class="setup-step">
+            <div class="setup-icon">✅</div>
+            <h1>Setup Complete</h1>
+            <p>The root API key has been saved. Add it to every request as an HTTP header:</p>
+            <code class="setup-code-block">Authorization: &lt;your-root-key&gt;</code>
+            <p class="setup-warn">
+                ⚠️ This key will <strong>not</strong> be shown again after you leave this page.
+                Save it somewhere safe before continuing.
+            </p>
+            @if (_generatedKey is not null)
+            {
+                <div class="key-box">@_generatedKey</div>
+                <button class="btn @(_copied ? "btn-ok" : "btn")"
+                        @onclick="CopyKey">
+                    @(_copied ? "✓ Copied" : "Copy key")
+                </button>
+            }
+            <div class="setup-actions">
+                <a href="/" class="btn btn-primary">Open Dashboard →</a>
+            </div>
+        </div>
+    }
+    else
+    {
+        <!-- Step 1+2 — Key selection -->
+        <div class="setup-step">
+            <div class="setup-icon">◆</div>
+            <h1>BLite Server Setup</h1>
+            <p>
+                Welcome! Before you can use the server you must set a <strong>root API key</strong>.
+                This key grants full administrative access — keep it secret.
+            </p>
+            <p>
+                Once setup is complete the <code>Auth:RootKey</code> value in
+                <em>appsettings.json</em> is no longer used; the key is stored securely
+                inside the user database.
+            </p>
+
+            <hr class="setup-divider" />
+
+            <div class="setup-field-group">
+                <label>
+                    Root API key
+                    <button class="btn btn-secondary btn-small" type="button"
+                            @onclick="GenerateKey">Generate random key</button>
+                </label>
+                <input class="setup-input @(_keyError ? "input-error" : "")"
+                       type="text" placeholder="Enter or generate a key"
+                       @bind="_key" @bind:event="oninput" />
+            </div>
+
+            <div class="setup-field-group">
+                <label>Confirm key</label>
+                <input class="setup-input @(_confirmError ? "input-error" : "")"
+                       type="text" placeholder="Repeat the key"
+                       @bind="_confirm" @bind:event="oninput" />
+            </div>
+
+            @if (_errorMessage is not null)
+            {
+                <div class="setup-error">@_errorMessage</div>
+            }
+
+            <div class="setup-actions">
+                <button class="btn btn-primary" @onclick="CompleteSetup"
+                        disabled="@_saving">
+                    @(_saving ? "Saving…" : "Complete Setup →")
+                </button>
+            </div>
+        </div>
+    }
+
+</div>
+
+@code {
+    private string _key     = string.Empty;
+    private string _confirm = string.Empty;
+    private string? _generatedKey;
+    private string? _errorMessage;
+    private bool   _keyError;
+    private bool   _confirmError;
+    private bool   _saving;
+    private bool   _done;
+    private bool   _copied;
+
+    protected override void OnInitialized()
+    {
+        // Already set up? Go straight to dashboard.
+        if (Studio.IsSetupComplete)
+            Nav.NavigateTo("/");
+    }
+
+    private void GenerateKey()
+    {
+        // 32 random URL-safe bytes → Base64url  ≈ 43 visible chars
+        var bytes = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
+        _key = _confirm = _generatedKey =
+            Convert.ToBase64String(bytes)
+                   .Replace('+', '-')
+                   .Replace('/', '_')
+                   .TrimEnd('=');
+        _errorMessage = null;
+        _keyError     = _confirmError = false;
+    }
+
+    private async Task CompleteSetup()
+    {
+        _errorMessage = null;
+        _keyError     = _confirmError = false;
+
+        if (string.IsNullOrWhiteSpace(_key))
+        {
+            _errorMessage = "Please enter or generate a root key.";
+            _keyError = true;
+            return;
+        }
+        if (_key.Length < 16)
+        {
+            _errorMessage = "Root key must be at least 16 characters long.";
+            _keyError = true;
+            return;
+        }
+        if (_key != _confirm)
+        {
+            _errorMessage = "The two keys do not match.";
+            _confirmError = true;
+            return;
+        }
+
+        _saving = true;
+        try
+        {
+            await Studio.CompleteSetupAsync(_key);
+            _done = true;
+        }
+        catch (Exception ex)
+        {
+            _errorMessage = $"Setup failed: {ex.Message}";
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task CopyKey()
+    {
+        if (_generatedKey is not null)
+        {
+            await JS.InvokeAsync<bool>("studioClipboard.copy", _generatedKey);
+            _copied = true;
+        }
+    }
+}

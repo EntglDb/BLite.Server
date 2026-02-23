@@ -22,15 +22,21 @@ public sealed class StudioService
 {
     private readonly EngineRegistry _registry;
     private readonly UserRepository _users;
+    private readonly SetupService   _setup;
     private readonly string _sourceUrl;
 
-    public StudioService(EngineRegistry registry, UserRepository users, IConfiguration config)
+    public StudioService(EngineRegistry registry, UserRepository users,
+        SetupService setup, IConfiguration config)
     {
         _registry  = registry;
         _users     = users;
+        _setup     = setup;
         _sourceUrl = config.GetValue<string>("License:SourceUrl")
                      ?? "https://github.com/blitedb/BLite.Server";
     }
+
+    /// <summary>True once the setup wizard has been completed.</summary>
+    public bool IsSetupComplete => _setup.IsSetupComplete;
 
     /// <summary>
     /// Returns the URL where the complete corresponding source code can be obtained,
@@ -76,6 +82,17 @@ public sealed class StudioService
     public Task RevokeUserAsync(string username)   => _users.RevokeAsync(username);
     public Task<bool> DeleteUserAsync(string username) => _users.DeleteUserAsync(username);
 
+    /// <summary>
+    /// Completes the setup wizard: sets the root key and persists the setup-complete marker.
+    /// After this call <see cref="IsSetupComplete"/> returns true and the wizard is no
+    /// longer shown.
+    /// </summary>
+    public async Task CompleteSetupAsync(string rootKey)
+    {
+        await _users.EnsureRootAsync(rootKey);
+        await _setup.MarkCompleteAsync();
+    }
+
     public async Task<string?> RotateKeyAsync(string username)
         => await _users.RotateKeyAsync(username);
 
@@ -105,11 +122,43 @@ public sealed class StudioService
         string? databaseId, string collection, string json,
         CancellationToken ct = default)
     {
-        var engine     = _registry.GetEngine(databaseId);
+        var engine = _registry.GetEngine(databaseId);
+
+        // Register all JSON field names first — BsonSpanWriter requires every key
+        // to be in the engine's persisted dictionary before serialization.
+        engine.RegisterKeys(CollectJsonKeys(json));
+
         var keyMap     = (ConcurrentDictionary<string, ushort>)engine.GetKeyMap();
         var reverseMap = (ConcurrentDictionary<ushort, string>)engine.GetKeyReverseMap();
         var doc        = BsonJsonConverter.FromJson(json, keyMap, reverseMap);
         return await engine.InsertAsync(collection, doc, ct);
+    }
+
+    /// Extracts every JSON property name from a JSON object (recursively, including nested
+    /// objects and arrays) so they can be pre-registered in the engine dictionary.
+    private static IEnumerable<string> CollectJsonKeys(string json)
+    {
+        var keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        using var jdoc = JsonDocument.Parse(json);
+        CollectElementKeys(jdoc.RootElement, keys);
+        return keys;
+    }
+
+    private static void CollectElementKeys(JsonElement el, HashSet<string> keys)
+    {
+        if (el.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var prop in el.EnumerateObject())
+            {
+                if (prop.Name != "_id") keys.Add(prop.Name);
+                CollectElementKeys(prop.Value, keys);
+            }
+        }
+        else if (el.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in el.EnumerateArray())
+                CollectElementKeys(item, keys);
+        }
     }
 
     /// <summary>

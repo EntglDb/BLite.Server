@@ -37,6 +37,11 @@ var consoleTelem = builder.Configuration.GetValue<bool?>("Telemetry:Console") ??
 
 // ── Services ──────────────────────────────────────────────────────────────────
 
+// SetupService — first-run wizard state (singleton, no DI deps so we create it early)
+var setupService = new SetupService(builder.Configuration);
+setupService.Load();
+builder.Services.AddSingleton(setupService);
+
 // EngineRegistry — manages system + tenant engines
 // The system engine hosts the _users collection; tenant engines live in DatabasesDirectory.
 var systemEngine   = new BLiteEngine(dbPath, pageConfig);
@@ -108,15 +113,21 @@ var app = builder.Build();
 var userRepo = app.Services.GetRequiredService<UserRepository>();
 await userRepo.LoadAllAsync();
 
-if (!string.IsNullOrWhiteSpace(rootKey))
+if (setupService.IsSetupComplete)
+{
+    // Root user was already created via the setup wizard — nothing to do.
+    app.Logger.LogInformation("Server setup complete. Root key is managed in the user database.");
+}
+else if (!string.IsNullOrWhiteSpace(rootKey))
 {
     await userRepo.EnsureRootAsync(rootKey);
-    app.Logger.LogInformation("Root user bootstrapped (key from Auth:RootKey).");
+    app.Logger.LogInformation("Root user bootstrapped from appsettings Auth:RootKey.");
 }
 else
 {
     app.Logger.LogWarning(
-        "Auth:RootKey is not set — server running in open/dev mode (all requests accepted as root).");
+        "Auth:RootKey is not configured and setup is not complete. " +
+        "Open the Studio at the configured port and complete the setup wizard.");
 }
 
 if (app.Environment.IsDevelopment())

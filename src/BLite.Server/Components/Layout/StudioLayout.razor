@@ -1,6 +1,9 @@
 @inherits LayoutComponentBase
 @inject StudioService Studio
+@inject NavigationManager Nav
 
+@if (Studio.IsSetupComplete)
+{
 <div class="studio-root">
     <nav class="studio-sidebar">
         <div class="studio-brand">
@@ -18,3 +21,12 @@
         @Body
     </main>
 </div>
+}
+
+@code {
+    protected override void OnInitialized()
+    {
+        if (!Studio.IsSetupComplete)
+            Nav.NavigateTo("/setup");
+    }
+}
