@@ -28,12 +28,15 @@
     <PackageReference Include="Grpc.AspNetCore.Server.Reflection" Version="2.76.0" />
     <!-- MessagePack for QueryDescriptor deserialization -->
     <PackageReference Include="MessagePack" Version="3.1.4" />
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.*" />
+    <PackageReference Include="Microsoft.OpenApi" Version="2.*" />
     <!-- OpenTelemetry -->
     <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.15.0" />
     <PackageReference Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.15.0" />
     <PackageReference Include="OpenTelemetry.Instrumentation.Runtime" Version="1.15.0" />
     <PackageReference Include="OpenTelemetry.Exporter.Console" Version="1.15.0" />
     <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.15.0" />
+    <PackageReference Include="Scalar.AspNetCore" Version="2.*" />
   </ItemGroup>
 
   <ItemGroup>

@@ -1,5 +1,6 @@
 @page "/tenants"
 @inject StudioService Studio
+@inject IJSRuntime JS
 
 <h1>Tenants</h1>
 
@@ -43,6 +44,9 @@
                     <button class="btn btn-small btn-danger"
                             @onclick="() => Erase(t.DatabaseId)">
                         GDPR Erase
+                    </button>
+                    <button class="btn btn-small" @onclick="() => Backup(t.DatabaseId)">
+                        ⬇ Backup
                     </button>
                 </td>
             </tr>
@@ -108,6 +112,21 @@
             _message = $"Tenant '{id}' erased (file deleted — GDPR).";
             _isError = false;
             Refresh();
+        }
+        catch (Exception ex)
+        {
+            _message = ex.Message;
+            _isError = true;
+        }
+    }
+
+    private async Task Backup(string databaseId)
+    {
+        try
+        {
+            var (data, fileName) = await Studio.GetBackupAsync(databaseId);
+            await JS.InvokeVoidAsync("studioDownload.saveAs", fileName, "application/zip",
+                Convert.ToBase64String(data));
         }
         catch (Exception ex)
         {

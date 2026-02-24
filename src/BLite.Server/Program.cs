@@ -13,27 +13,29 @@ using BLite.Server.Services;
 using BLite.Server.Studio;
 using BLite.Server.Telemetry;
 using BLite.Server.Transactions;
+using Microsoft.OpenApi;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
 using OpenTelemetry.Metrics;
+using Scalar.AspNetCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // ── Configuration ─────────────────────────────────────────────────────────────
-var serverConfig  = builder.Configuration.GetSection("BLiteServer");
-var dbPath        = serverConfig.GetValue<string>("DatabasePath") ?? "blite.db";
-var databasesDir  = serverConfig.GetValue<string>("DatabasesDirectory") ?? "data/tenants";
+var serverConfig = builder.Configuration.GetSection("BLiteServer");
+var dbPath = serverConfig.GetValue<string>("DatabasePath") ?? "blite.db";
+var databasesDir = serverConfig.GetValue<string>("DatabasesDirectory") ?? "data/tenants";
 var pageSizeBytes = serverConfig.GetValue<int>("MaxPageSizeBytes");
 if (pageSizeBytes <= 0) pageSizeBytes = 16384;
 var pageConfig = new PageFileConfig
 {
-    PageSize        = pageSizeBytes,
-    InitialFileSize = Math.Max(2 * 1024 * 1024, (long)pageSizeBytes * 128),
-    Access          = System.IO.MemoryMappedFiles.MemoryMappedFileAccess.ReadWrite
+    PageSize = pageSizeBytes,
+    GrowthBlockSize = Math.Max(1024 * 1024, pageSizeBytes * 64),
+    Access = System.IO.MemoryMappedFiles.MemoryMappedFileAccess.ReadWrite
 };
-var rootKey      = builder.Configuration.GetValue<string>("Auth:RootKey");
+var rootKey = builder.Configuration.GetValue<string>("Auth:RootKey");
 var otlpEndpoint = builder.Configuration.GetValue<string>("Telemetry:Otlp:Endpoint");
-var telemetryOn  = builder.Configuration.GetValue<bool?>("Telemetry:Enabled") ?? true;
+var telemetryOn = builder.Configuration.GetValue<bool?>("Telemetry:Enabled") ?? true;
 var consoleTelem = builder.Configuration.GetValue<bool?>("Telemetry:Console") ?? builder.Environment.IsDevelopment();
 
 // ── Services ──────────────────────────────────────────────────────────────────
@@ -45,8 +47,8 @@ builder.Services.AddSingleton(setupService);
 
 // EngineRegistry — manages system + tenant engines
 // The system engine hosts the _users collection; tenant engines live in DatabasesDirectory.
-var systemEngine   = new BLiteEngine(dbPath, pageConfig);
-var engineRegistry = new EngineRegistry(systemEngine, databasesDir, pageConfig);
+var systemEngine = new BLiteEngine(dbPath, pageConfig);
+var engineRegistry = new EngineRegistry(systemEngine, dbPath, databasesDir, pageConfig);
 engineRegistry.ScanDirectory();
 builder.Services.AddSingleton(engineRegistry);
 
@@ -58,6 +60,41 @@ builder.Services.AddSingleton<AuthorizationService>();
 
 // REST API
 builder.Services.AddScoped<RestAuthFilter>();
+
+// OpenAPI / Scalar UI
+builder.Services.AddOpenApi(opts =>
+{
+    opts.AddDocumentTransformer((doc, _, _) =>
+    {
+        doc.Info = new OpenApiInfo
+        {
+            Title = "BLite REST API",
+            Version = "v1",
+            Description = "HTTP management API for BLite Server. " +
+                          "Authenticate with the `x-api-key` header or `Authorization: Bearer <key>`.",
+        };
+
+        doc.Components ??= new OpenApiComponents();
+        doc.Components.SecuritySchemes = new Dictionary<string, IOpenApiSecurityScheme>
+        {
+            ["ApiKey"] = new OpenApiSecurityScheme
+            {
+                Type = SecuritySchemeType.ApiKey,
+                In = ParameterLocation.Header,
+                Name = "x-api-key",
+                Description = "BLite API key (header: `x-api-key`)",
+            },
+            ["Bearer"] = new OpenApiSecurityScheme
+            {
+                Type = SecuritySchemeType.Http,
+                Scheme = "bearer",
+                Description = "BLite API key as Bearer token (`Authorization: Bearer <key>`)",
+            },
+        };
+
+        return Task.CompletedTask;
+    });
+});
 
 // Transactions
 builder.Services.Configure<TransactionOptions>(
@@ -75,18 +112,26 @@ if (telemetryOn)
         {
             t.AddAspNetCoreInstrumentation()
              .AddSource(BLiteMetrics.ServiceName);
-            if (consoleTelem)  t.AddConsoleExporter();
+            if (consoleTelem) t.AddConsoleExporter();
             if (!string.IsNullOrWhiteSpace(otlpEndpoint))
-                t.AddOtlpExporter(o => o.Endpoint = new Uri(otlpEndpoint));
+                t.AddOtlpExporter(o =>
+                {
+                    o.Protocol = OpenTelemetry.Exporter.OtlpExportProtocol.HttpProtobuf;
+                    o.Endpoint = new Uri(otlpEndpoint + "/v1/traces");
+                });
         })
         .WithMetrics(m =>
         {
             m.AddAspNetCoreInstrumentation()
              .AddRuntimeInstrumentation()
              .AddMeter(BLiteMetrics.ServiceName);
-            if (consoleTelem)  m.AddConsoleExporter();
+            if (consoleTelem) m.AddConsoleExporter();
             if (!string.IsNullOrWhiteSpace(otlpEndpoint))
-                m.AddOtlpExporter(o => o.Endpoint = new Uri(otlpEndpoint));
+                m.AddOtlpExporter(o =>
+                {
+                    o.Protocol = OpenTelemetry.Exporter.OtlpExportProtocol.HttpProtobuf;
+                    o.Endpoint = new Uri(otlpEndpoint + "/v1/metrics");
+                });
         });
 }
 
@@ -96,7 +141,7 @@ builder.Services.AddGrpc(options =>
     options.Interceptors.Add<TelemetryInterceptor>();
     options.EnableDetailedErrors = builder.Environment.IsDevelopment();
     options.MaxReceiveMessageSize = 16 * 1024 * 1024; // 16 MB
-    options.MaxSendMessageSize    = 16 * 1024 * 1024;
+    options.MaxSendMessageSize = 16 * 1024 * 1024;
 });
 
 builder.Services.AddGrpcReflection(); // enable grpcurl introspection in Development
@@ -160,6 +205,15 @@ app.MapGrpcService<TransactionServiceImpl>();
 // REST API endpoints (/api/v1/...)
 app.MapRestApi();
 
+// OpenAPI spec + Scalar interactive UI (always available so operators can test)
+app.MapOpenApi();
+app.MapScalarApiReference(opts =>
+{
+    opts.Title = "BLite REST API";
+    opts.OpenApiRoutePattern = "/openapi/v1.json";
+    opts.DefaultHttpClient = new(ScalarTarget.Shell, ScalarClient.Curl);
+});
+
 // Health-check endpoint (available on all ports)
 if (!studioEnabled)
 {
@@ -173,7 +227,7 @@ var sourceUrl = app.Configuration.GetValue<string>("License:SourceUrl")
 app.MapGet("/source", () => Results.Redirect(sourceUrl, permanent: false))
    .ExcludeFromDescription();
 app.MapGet("/.well-known/source", () => Results.Json(new
-   { source = sourceUrl, license = "AGPL-3.0" }))
+{ source = sourceUrl, license = "AGPL-3.0" }))
    .ExcludeFromDescription();
 
 // ── Studio: Blazor Server endpoints ──────────────────────────────────────────

@@ -6,6 +6,7 @@
 
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.IO.Compression;
 using System.Text.Json;
 using BLite.Bson;
 using BLite.Core;
@@ -64,9 +65,49 @@ public sealed class StudioService
     public async Task DeprovisionAsync(string databaseId, bool deleteFiles)
         => await _registry.DeprovisionAsync(databaseId, deleteFiles);
 
+    /// <summary>
+    /// Creates an in-memory ZIP backup of the specified database using a hot checkpoint-and-copy.
+    /// Pass <c>null</c> for the system database.
+    /// Returns the ZIP bytes and a timestamped filename.
+    /// </summary>
+    public async Task<(byte[] Data, string FileName)> GetBackupAsync(
+        string? databaseId, CancellationToken ct = default)
+    {
+        var engine  = _registry.GetEngine(databaseId);
+        var label   = string.IsNullOrWhiteSpace(databaseId) ? "system" : databaseId.Trim().ToLowerInvariant();
+        var stamp   = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
+        var zipName = $"blite-backup-{label}-{stamp}.zip";
+
+        // Write to a temp file so the engine can stream to it directly,
+        // then wrap into a ZIP for download.
+        var tempDb = Path.Combine(Path.GetTempPath(), $"blite-bkp-{Guid.NewGuid():N}.db");
+        try
+        {
+            await engine.BackupAsync(tempDb, ct);
+
+            using var ms = new MemoryStream();
+            using (var zip = new ZipArchive(ms, ZipArchiveMode.Create, leaveOpen: true))
+            {
+                var entry = zip.CreateEntry($"{label}.db", CompressionLevel.Fastest);
+                await using var entryStream = entry.Open();
+                await using var fs = new FileStream(tempDb, FileMode.Open, FileAccess.Read, FileShare.None);
+                await fs.CopyToAsync(entryStream, ct);
+            }
+            return (ms.ToArray(), zipName);
+        }
+        finally
+        {
+            if (File.Exists(tempDb)) File.Delete(tempDb);
+        }
+    }
+
     // ── Users ─────────────────────────────────────────────────────────────────
 
     public IReadOnlyList<BLiteUser> ListUsers() => _users.ListAll();
+
+    /// <summary>Reloads the user list from storage into the in-memory cache.</summary>
+    public Task ReloadUsersAsync(CancellationToken ct = default)
+        => _users.LoadAllAsync(ct);
 
     public async Task<string> CreateUserAsync(
         string username, string? ns, string? databaseId)
@@ -188,6 +229,7 @@ public sealed class StudioService
         var doc = col.CreateDocument(["__studio_init"], b => b.AddBoolean("__studio_init", true));
         var id  = await col.InsertAsync(doc, ct);
         await col.DeleteAsync(id, ct);
+        await engine.CommitAsync(ct);
     }
 
     private static void AppendJsonProperty(BsonDocumentBuilder b, string name, JsonElement el)

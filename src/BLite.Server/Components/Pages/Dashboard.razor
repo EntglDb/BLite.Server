@@ -1,5 +1,6 @@
 @page "/"
 @inject StudioService Studio
+@inject IJSRuntime JS
 
 <h1>Dashboard</h1>
 
@@ -38,15 +39,53 @@ else
                 </a>
             </div>
         </div>
+        <div class="card full-width">
+            <div class="card-label">System Database Backup</div>
+            <div class="card-value">
+                <button class="btn btn-small" @onclick="BackupSystem" disabled="@_backupRunning">
+                    @(_backupRunning ? "Creating backup…" : "⬇ Download Backup (system)")
+                </button>
+                @if (!string.IsNullOrEmpty(_backupMessage))
+                {
+                    <span class="@(_backupError ? "alert alert-error" : "alert alert-ok")" style="margin-left:12px">@_backupMessage</span>
+                }
+            </div>
+        </div>
     </div>
 }
 
 @code {
     private ServerInfo? _info;
+    private bool   _backupRunning;
+    private string _backupMessage = "";
+    private bool   _backupError;
 
     protected override void OnInitialized()
     {
         _info = Studio.GetServerInfo();
+    }
+
+    private async Task BackupSystem()
+    {
+        _backupRunning = true;
+        _backupMessage = "";
+        try
+        {
+            var (data, fileName) = await Studio.GetBackupAsync(null);
+            await JS.InvokeVoidAsync("studioDownload.saveAs", fileName, "application/zip",
+                Convert.ToBase64String(data));
+            _backupMessage = "Backup downloaded.";
+            _backupError   = false;
+        }
+        catch (Exception ex)
+        {
+            _backupMessage = ex.Message;
+            _backupError   = true;
+        }
+        finally
+        {
+            _backupRunning = false;
+        }
     }
 
     private static string FormatUptime(TimeSpan ts)

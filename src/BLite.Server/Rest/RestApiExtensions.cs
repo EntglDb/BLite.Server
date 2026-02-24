@@ -6,6 +6,7 @@
 // Errors are modelled with ErrorOr and mapped to RFC-9457 ProblemDetails.
 
 using System.Collections.Concurrent;
+using System.IO.Compression;
 using BLite.Bson;
 using BLite.Server.Auth;
 using ErrorOr;
@@ -21,7 +22,8 @@ public static class RestApiExtensions
     {
         var api = app.MapGroup("/api/v1")
                      .AddEndpointFilter<RestAuthFilter>()
-                     .WithTags("BLite REST API");
+                     .WithTags("BLite REST API")
+                     .WithOpenApi();
 
         MapDatabases(api);
         MapCollections(api);
@@ -105,10 +107,54 @@ public static class RestApiExtensions
                     statusCode: StatusCodes.Status404NotFound);
             }
         });
-    }
 
-    // ────────────────────────────────────────────────────────────────────────────
-    // Collections
+        // GET /api/v1/databases/{dbId}/backup — hot backup as a ZIP download
+        //   Use dbId "_system" for the system (default) database.
+        g.MapGet("/databases/{dbId}/backup",
+            async (HttpContext ctx,
+                   EngineRegistry registry,
+                   AuthorizationService authz,
+                   string dbId,
+                   CancellationToken ct) =>
+        {
+            var auth = Authorized(ctx, authz, "*", BLiteOperation.Admin);
+            if (auth.IsError) return auth.ToResult(_ => Results.Ok());
+
+            var realId  = dbId.Equals("_system", StringComparison.OrdinalIgnoreCase) ? null : dbId;
+            var label   = realId ?? "system";
+            var stamp   = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
+            var zipName = $"blite-backup-{label}-{stamp}.zip";
+            var tempDb  = Path.Combine(Path.GetTempPath(), $"blite-bkp-{Guid.NewGuid():N}.db");
+            try
+            {
+                var engine = registry.GetEngine(realId);
+                await engine.BackupAsync(tempDb, ct);
+
+                var ms = new MemoryStream();
+                using (var zip = new ZipArchive(ms, ZipArchiveMode.Create, leaveOpen: true))
+                {
+                    var entry = zip.CreateEntry($"{label}.db", CompressionLevel.Fastest);
+                    await using var es = entry.Open();
+                    await using var fs = new FileStream(
+                        tempDb, FileMode.Open, FileAccess.Read, FileShare.None);
+                    await fs.CopyToAsync(es, ct);
+                }
+                ms.Position = 0;
+                return Results.File(ms, "application/zip", zipName);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return Results.Problem(
+                    title:      "Not Found",
+                    detail:     ex.Message,
+                    statusCode: StatusCodes.Status404NotFound);
+            }
+            finally
+            {
+                if (File.Exists(tempDb)) File.Delete(tempDb);
+            }
+        });
+    }
     // ────────────────────────────────────────────────────────────────────────────
 
     private static void MapCollections(RouteGroupBuilder g)
@@ -175,6 +221,7 @@ public static class RestApiExtensions
                 var doc = col.CreateDocument(["__rest_init"], b => b.AddBoolean("__rest_init", true));
                 var id  = await col.InsertAsync(doc, ct);
                 await col.DeleteAsync(id, ct);
+                await engine.CommitAsync(ct);
                 return Results.Created(
                     $"/api/v1/{dbId}/{logical}/documents",
                     new { databaseId = dbId, collection = logical });
@@ -676,6 +723,16 @@ public static class RestApiExtensions
         else if (el.ValueKind == System.Text.Json.JsonValueKind.Array)
             foreach (var item in el.EnumerateArray())
                 CollectElementKeys(item, keys);
+    }
+
+    private static async Task ZipAddFileAsync(
+        ZipArchive zip, string filePath, string entryName, CancellationToken ct)
+    {
+        var entry = zip.CreateEntry(entryName, CompressionLevel.Fastest);
+        await using var entryStream = entry.Open();
+        await using var fs = new FileStream(
+            filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        await fs.CopyToAsync(entryStream, ct);
     }
 }
 

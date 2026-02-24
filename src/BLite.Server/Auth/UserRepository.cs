@@ -105,6 +105,7 @@ public sealed class UserRepository
             b => RebuildBuilder(b, doc, active: false));
 
         var ok = await col.UpdateAsync(id, updated, ct);
+        if (ok) await _engine.CommitAsync(ct);
 
         if (ok)
         {
@@ -127,6 +128,7 @@ public sealed class UserRepository
 
         var col = _engine.GetOrCreateCollection(Collection);
         var ok  = await col.DeleteAsync(id, ct);
+        if (ok) await _engine.CommitAsync(ct);
 
         if (ok)
         {
@@ -156,6 +158,7 @@ public sealed class UserRepository
 
         var ok = await col.UpdateAsync(id, updated, ct);
         if (!ok) return null;
+        await _engine.CommitAsync(ct);
 
         // Update cache: remove old hash, add new
         var oldUser = _byKey.Values.FirstOrDefault(u => u.Username.Equals(username, StringComparison.OrdinalIgnoreCase));
@@ -186,6 +189,7 @@ public sealed class UserRepository
         var ok = await col.UpdateAsync(id, updated, ct);
         if (ok)
         {
+            await _engine.CommitAsync(ct);
             var oldUser = _byKey.Values.FirstOrDefault(u =>
                 u.Username.Equals(username, StringComparison.OrdinalIgnoreCase));
             if (oldUser is not null)
@@ -234,6 +238,7 @@ public sealed class UserRepository
                 .AddString("database_id", user.DatabaseId ?? ""));
 
         var id = await col.InsertAsync(doc, ct);
+        await _engine.CommitAsync(ct);
         _byKey[user.ApiKeyHash] = user with { StoredId = id };
         _byName[user.Username]  = id;
     }

@@ -44,6 +44,9 @@ public sealed class EngineRegistry : IDisposable
     /// <summary>Directory that contains tenant <c>.db</c> files.</summary>
     public string DatabasesDirectory { get; }
 
+    /// <summary>Absolute path to the system (default) database file.</summary>
+    public string SystemDatabasePath { get; }
+
     private readonly ConcurrentDictionary<string, BLiteEngine> _active
         = new(StringComparer.OrdinalIgnoreCase);
 
@@ -64,12 +67,14 @@ public sealed class EngineRegistry : IDisposable
     /// </param>
     public EngineRegistry(
         BLiteEngine     systemEngine,
+        string          systemDatabasePath,
         string          databasesDirectory,
         PageFileConfig  defaultPageConfig)
     {
-        _active[DefaultKey] = systemEngine;
-        DatabasesDirectory  = databasesDirectory;
-        _defaultPageConfig  = defaultPageConfig;
+        _active[DefaultKey]  = systemEngine;
+        SystemDatabasePath   = Path.GetFullPath(systemDatabasePath);
+        DatabasesDirectory   = databasesDirectory;
+        _defaultPageConfig   = defaultPageConfig;
 
         if (!string.IsNullOrEmpty(databasesDirectory))
             Directory.CreateDirectory(databasesDirectory);
@@ -214,6 +219,20 @@ public sealed class EngineRegistry : IDisposable
             try { engine.Dispose(); } catch { /* best-effort */ }
 
         _active.Clear();
+    }
+
+    // ── Path helpers ──────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Returns the absolute path of the <c>.db</c> file for the given database.
+    /// Pass <c>null</c> or empty string for the system (default) database.
+    /// </summary>
+    public string GetDatabasePath(string? databaseId)
+    {
+        var key = Normalise(databaseId);
+        return string.IsNullOrEmpty(key)
+            ? SystemDatabasePath
+            : Path.GetFullPath(GetDbPath(key));
     }
 
     // ── Internals ─────────────────────────────────────────────────────────────

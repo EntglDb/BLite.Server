@@ -228,7 +228,17 @@
         public BLiteOperation Ops        { get; set; } = BLiteOperation.All;
     }
 
-    protected override void OnInitialized() => Refresh();
+    protected override async Task OnInitializedAsync() => await RefreshAsync();
+
+    private async Task RefreshAsync()
+    {
+        // Reload from storage so the list is always fresh
+        // (the in-memory cache is updated by every write, but a cold
+        //  start or a failed first load might leave it incomplete).
+        await Studio.ReloadUsersAsync();
+        _users   = Studio.ListUsers();
+        _tenants = Studio.ListTenants();
+    }
 
     private void Refresh()
     {
