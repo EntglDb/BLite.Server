@@ -7,7 +7,10 @@
 
 using System.Collections.Concurrent;
 using System.IO.Compression;
+using System.Text.Json.Nodes;
 using BLite.Bson;
+using BLite.Core;
+using BLite.Core.Query.Blql;
 using BLite.Server.Auth;
 using ErrorOr;
 
@@ -28,6 +31,7 @@ public static class RestApiExtensions
         MapDatabases(api);
         MapCollections(api);
         MapDocuments(api);
+        MapBlql(api);
         MapUsers(api);
     }
 
@@ -283,9 +287,9 @@ public static class RestApiExtensions
                    AuthorizationService authz,
                    string dbId,
                    string collection,
-                   int skip,
-                   int limit,
-                   CancellationToken ct) =>
+                   int skip = 0,
+                   int limit = 50,
+                   CancellationToken ct = default) =>
         {
             if (limit is <= 0 or > 1000) limit = 50;
 
@@ -507,6 +511,283 @@ public static class RestApiExtensions
                     statusCode: StatusCodes.Status404NotFound);
             }
         });
+    }
+
+    // ────────────────────────────────────────────────────────────────────────────
+    // BLQL — BLite Query Language
+    // ────────────────────────────────────────────────────────────────────────────
+
+    private static void MapBlql(RouteGroupBuilder g)
+    {
+        // POST /api/v1/{dbId}/{collection}/query
+        //
+        // Body (all fields optional):
+        //   {
+        //     "filter":  { "status": "active", "age": { "$gt": 18 } },
+        //     "sort":    { "name": 1, "age": -1 },
+        //     "skip":    0,
+        //     "limit":   50,
+        //     "include": ["name", "email"],   // or "exclude": ["password"]
+        //   }
+        //
+        // Response: { "count": N, "skip": N, "limit": N, "documents": [ {...}, ... ] }
+        g.MapPost("/{dbId}/{collection}/query",
+            async (HttpContext ctx,
+                   EngineRegistry registry,
+                   AuthorizationService authz,
+                   string dbId,
+                   string collection,
+                   CancellationToken ct) =>
+        {
+            var auth = AuthorizedForDb(ctx, authz, dbId, collection, BLiteOperation.Query);
+            if (auth.IsError) return auth.ToResult(_ => Results.Ok());
+
+            var user     = auth.Value;
+            var physical = NamespaceResolver.Resolve(user, collection);
+
+            string body;
+            try
+            {
+                using var reader = new StreamReader(ctx.Request.Body);
+                body = await reader.ReadToEndAsync(ct);
+            }
+            catch (Exception ex) { return BLiteErrors.InvalidJson(ex.Message).ToResult(); }
+
+            BlqlFilter     filter     = BlqlFilter.Empty;
+            BlqlSort?      sort       = null;
+            int            skip       = 0;
+            int            limit      = 50;
+            BlqlProjection projection = BlqlProjection.All;
+
+            if (!string.IsNullOrWhiteSpace(body))
+            {
+                try
+                {
+                    using var jdoc = System.Text.Json.JsonDocument.Parse(body);
+                    var root = jdoc.RootElement;
+
+                    if (root.TryGetProperty("filter", out var filterEl) &&
+                        filterEl.ValueKind == System.Text.Json.JsonValueKind.Object)
+                        filter = BlqlFilterParser.Parse(filterEl.GetRawText());
+
+                    if (root.TryGetProperty("sort", out var sortEl) &&
+                        sortEl.ValueKind == System.Text.Json.JsonValueKind.Object)
+                        sort = BlqlSortParser.Parse(sortEl.GetRawText());
+
+                    if (root.TryGetProperty("skip", out var skipEl))
+                        skip = Math.Max(0, skipEl.GetInt32());
+
+                    if (root.TryGetProperty("limit", out var limitEl))
+                        limit = limitEl.GetInt32();
+                    if (limit <= 0 || limit > 1000) limit = 50;
+
+                    if (root.TryGetProperty("include", out var includeEl) &&
+                        includeEl.ValueKind == System.Text.Json.JsonValueKind.Array)
+                    {
+                        var fields = includeEl.EnumerateArray()
+                            .Where(e => e.ValueKind == System.Text.Json.JsonValueKind.String)
+                            .Select(e => e.GetString()!)
+                            .ToArray();
+                        if (fields.Length > 0) projection = BlqlProjection.Include(fields);
+                    }
+                    else if (root.TryGetProperty("exclude", out var excludeEl) &&
+                        excludeEl.ValueKind == System.Text.Json.JsonValueKind.Array)
+                    {
+                        var fields = excludeEl.EnumerateArray()
+                            .Where(e => e.ValueKind == System.Text.Json.JsonValueKind.String)
+                            .Select(e => e.GetString()!)
+                            .ToArray();
+                        if (fields.Length > 0) projection = BlqlProjection.Exclude(fields);
+                    }
+                }
+                catch (FormatException ex)
+                {
+                    return Results.ValidationProblem(new Dictionary<string, string[]>
+                    {
+                        ["filter"] = [ex.Message]
+                    });
+                }
+                catch (System.Text.Json.JsonException ex)
+                {
+                    return BLiteErrors.InvalidJson(ex.Message).ToResult();
+                }
+            }
+
+            try
+            {
+                var engine = registry.GetEngine(NullIfDefault(dbId));
+                var col    = engine.GetOrCreateCollection(physical);
+
+                var query = col.Query(filter);
+                if (sort is not null) query = query.Sort(sort);
+                query = query.Skip(skip).Take(limit).Project(projection);
+
+                var docs = query.ToList()
+                    .Select(d => JsonNode.Parse(BsonJsonConverter.ToJson(d, indented: false)))
+                    .ToList();
+
+                return Results.Ok(new { count = docs.Count, skip, limit, documents = docs });
+            }
+            catch (InvalidOperationException ex)
+            {
+                return Results.Problem(
+                    title:      "Not Found",
+                    detail:     ex.Message,
+                    statusCode: StatusCodes.Status404NotFound);
+            }
+        })
+        .WithSummary("BLQL query — filter, sort, page, project")
+        .WithDescription(
+            "Executes a BLQL (BLite Query Language) query on a collection. " +
+            "The request body is a JSON object with optional fields: " +
+            "`filter` (MQL-style filter object), `sort` ({field: 1|-1}), " +
+            "`skip` (int), `limit` (int, max 1000), " +
+            "`include` (string[]) or `exclude` (string[]) for projection.");
+
+        // GET /api/v1/{dbId}/{collection}/query?filter=...&sort=...&skip=0&limit=50
+        //
+        // Lightweight query variant for simple filters expressible in a URL.
+        // `filter` and `sort` are URL-encoded JSON strings.
+        g.MapGet("/{dbId}/{collection}/query",
+            (HttpContext ctx,
+             EngineRegistry registry,
+             AuthorizationService authz,
+             string dbId,
+             string collection,
+             string? filter,
+             string? sort,
+             int skip = 0,
+             int limit = 50) =>
+        {
+            var auth = AuthorizedForDb(ctx, authz, dbId, collection, BLiteOperation.Query);
+            if (auth.IsError) return auth.ToResult(_ => Results.Ok());
+
+            var user     = auth.Value;
+            var physical = NamespaceResolver.Resolve(user, collection);
+
+            if (limit <= 0 || limit > 1000) limit = 50;
+
+            BlqlFilter blqlFilter = BlqlFilter.Empty;
+            BlqlSort?  blqlSort   = null;
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(filter))
+                    blqlFilter = BlqlFilterParser.Parse(filter);
+                if (!string.IsNullOrWhiteSpace(sort))
+                    blqlSort = BlqlSortParser.Parse(sort);
+            }
+            catch (FormatException ex)
+            {
+                return Results.ValidationProblem(new Dictionary<string, string[]>
+                {
+                    ["filter"] = [ex.Message]
+                });
+            }
+            catch (System.Text.Json.JsonException ex)
+            {
+                return BLiteErrors.InvalidJson(ex.Message).ToResult();
+            }
+
+            try
+            {
+                var engine = registry.GetEngine(NullIfDefault(dbId));
+                var col    = engine.GetOrCreateCollection(physical);
+
+                var query = col.Query(blqlFilter);
+                if (blqlSort is not null) query = query.Sort(blqlSort);
+                query = query.Skip(skip).Take(limit);
+
+                var docs = query.ToList()
+                    .Select(d => JsonNode.Parse(BsonJsonConverter.ToJson(d, indented: false)))
+                    .ToList();
+
+                return Results.Ok(new { count = docs.Count, skip, limit, documents = docs });
+            }
+            catch (InvalidOperationException ex)
+            {
+                return Results.Problem(
+                    title:      "Not Found",
+                    detail:     ex.Message,
+                    statusCode: StatusCodes.Status404NotFound);
+            }
+        })
+        .WithSummary("BLQL query via query string")
+        .WithDescription(
+            "Executes a BLQL query using URL query parameters. " +
+            "`filter` and `sort` are URL-encoded JSON strings (e.g. `filter={\"status\":\"active\"}`).");
+
+        // POST /api/v1/{dbId}/{collection}/query/count
+        //
+        // Body (filter only):
+        //   { "filter": { "status": "active" } }
+        //
+        // Response: { "count": 42 }
+        g.MapPost("/{dbId}/{collection}/query/count",
+            async (HttpContext ctx,
+                   EngineRegistry registry,
+                   AuthorizationService authz,
+                   string dbId,
+                   string collection,
+                   CancellationToken ct) =>
+        {
+            var auth = AuthorizedForDb(ctx, authz, dbId, collection, BLiteOperation.Query);
+            if (auth.IsError) return auth.ToResult(_ => Results.Ok());
+
+            var user     = auth.Value;
+            var physical = NamespaceResolver.Resolve(user, collection);
+
+            BlqlFilter filter = BlqlFilter.Empty;
+
+            string body;
+            try
+            {
+                using var reader = new StreamReader(ctx.Request.Body);
+                body = await reader.ReadToEndAsync(ct);
+            }
+            catch (Exception ex) { return BLiteErrors.InvalidJson(ex.Message).ToResult(); }
+
+            if (!string.IsNullOrWhiteSpace(body))
+            {
+                try
+                {
+                    using var jdoc = System.Text.Json.JsonDocument.Parse(body);
+                    var root = jdoc.RootElement;
+                    if (root.TryGetProperty("filter", out var filterEl) &&
+                        filterEl.ValueKind == System.Text.Json.JsonValueKind.Object)
+                        filter = BlqlFilterParser.Parse(filterEl.GetRawText());
+                }
+                catch (FormatException ex)
+                {
+                    return Results.ValidationProblem(new Dictionary<string, string[]>
+                    {
+                        ["filter"] = [ex.Message]
+                    });
+                }
+                catch (System.Text.Json.JsonException ex)
+                {
+                    return BLiteErrors.InvalidJson(ex.Message).ToResult();
+                }
+            }
+
+            try
+            {
+                var engine = registry.GetEngine(NullIfDefault(dbId));
+                var col    = engine.GetOrCreateCollection(physical);
+                var count  = col.Query(filter).Count();
+                return Results.Ok(new { count });
+            }
+            catch (InvalidOperationException ex)
+            {
+                return Results.Problem(
+                    title:      "Not Found",
+                    detail:     ex.Message,
+                    statusCode: StatusCodes.Status404NotFound);
+            }
+        })
+        .WithSummary("BLQL count — count documents matching a filter")
+        .WithDescription(
+            "Counts the documents matching a BLQL filter without returning payloads. " +
+            "Body: `{ \"filter\": { ... } }`. Omit the body (or send `{}`) to count all documents.");
     }
 
     // ────────────────────────────────────────────────────────────────────────────
