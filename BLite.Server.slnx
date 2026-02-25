@@ -2,9 +2,9 @@
   <Folder Name="/Elementi di soluzione/">
     <File Path="AGENTS.md" />
   </Folder>
-  <Project Path="../../../../../../../../github/BLite.Server/src/BLite.Proto/BLite.Proto.csproj" />
-  <Project Path="../../../../../../../../github/BLite.Server/src/BLite.Server/BLite.Server.csproj" />
-  <Project Path="../../../../../../../../github/BLite/src/BLite.Bson/BLite.Bson.csproj" />
-  <Project Path="../../../../../../../../github/BLite/src/BLite.Core/BLite.Core.csproj" />
-  <Project Path="../../../../../../../../github/BLite/src/BLite/BLite.csproj" />
+  <Project Path="../BLite/src/BLite.Bson/BLite.Bson.csproj" />
+  <Project Path="../BLite/src/BLite.Core/BLite.Core.csproj" />
+  <Project Path="../BLite/src/BLite/BLite.csproj" />
+  <Project Path="src/BLite.Proto/BLite.Proto.csproj" />
+  <Project Path="src/BLite.Server/BLite.Server.csproj" />
 </Solution>

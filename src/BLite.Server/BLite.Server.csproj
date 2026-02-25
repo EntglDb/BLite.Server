@@ -26,6 +26,7 @@
     <PackageReference Include="Grpc.AspNetCore" Version="2.76.0" />
     <!-- gRPC reflection for grpcurl/tooling in Development -->
     <PackageReference Include="Grpc.AspNetCore.Server.Reflection" Version="2.76.0" />
+    <PackageReference Include="Lucene.Net" Version="3.0.3" />
     <!-- MessagePack for QueryDescriptor deserialization -->
     <PackageReference Include="MessagePack" Version="3.1.4" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.*" />

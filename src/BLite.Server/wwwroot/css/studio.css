@@ -545,6 +545,57 @@ select.input {
 .text-red   { color: var(--red); }
 .text-green { color: var(--green); }
 
+/* ── Embedding preview panel (Documents.razor) ───────────────────────────── */
+
+.embedding-preview {
+    border-top: 1px solid var(--border);
+    background: var(--bg-alt, var(--bg));
+}
+
+.embedding-preview-title {
+    padding: 7px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-dim);
+    cursor: pointer;
+    user-select: none;
+    list-style: none;
+}
+
+.embedding-preview-title::marker,
+.embedding-preview-title::-webkit-details-marker { display: none; }
+
+.embedding-preview-title::before {
+    content: "▶ ";
+    font-size: 9px;
+    margin-right: 4px;
+    transition: transform 0.15s;
+}
+
+details.embedding-preview[open] .embedding-preview-title::before {
+    content: "▼ ";
+}
+
+.embedding-preview-body {
+    padding: 8px 12px 10px;
+}
+
+.embedding-preview-text {
+    display: block;
+    font-family: var(--font-mono, monospace);
+    font-size: 11.5px;
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius, 4px);
+    padding: 8px 10px;
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 120px;
+    overflow-y: auto;
+    line-height: 1.5;
+}
+
 /* ── Setup wizard (SetupLayout) ───────────────────────────────────────────── */
 
 .setup-page {

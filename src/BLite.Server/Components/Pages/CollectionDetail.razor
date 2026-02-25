@@ -1,5 +1,9 @@
 @page "/collection/{Collection}"
 @inject StudioService Studio
+@using BLite.Bson
+@using BLite.Core
+@using BLite.Core.Indexing
+@using BLite.Core.Storage
 
 <div class="breadcrumb">
     <a href="@CollectionsUrl" class="breadcrumb-link">▤ Collections</a>
@@ -29,7 +33,7 @@
     </div>
     <div class="card">
         <div class="card-label">Indexes</div>
-        <div class="card-value">@_indexes.Count</div>
+        <div class="card-value">@_indexDescriptors.Count</div>
     </div>
     <div class="card" style="display:flex;align-items:center">
         <a href="@DocumentsUrl" class="btn btn-primary">Browse Documents</a>
@@ -41,7 +45,8 @@
     <summary class="panel-title">⚡ Indexes</summary>
     <div class="panel-body">
 
-        @if (_indexes.Count == 0)
+        @* ── Existing indexes ── *@
+        @if (_indexDescriptors.Count == 0)
         {
             <p class="empty" style="text-align:left;padding:8px 0">No secondary indexes defined.</p>
         }
@@ -51,18 +56,31 @@
                 <table class="data-table">
                     <thead>
                         <tr>
-                            <th>Index name</th>
-                            <th>Actions</th>
+                            <th>Name</th>
+                            <th>Type</th>
+                            <th>Field</th>
+                            <th>Details</th>
+                            <th></th>
                         </tr>
                     </thead>
                     <tbody>
-                        @foreach (var idx in _indexes)
+                        @foreach (var idx in _indexDescriptors)
                         {
                             <tr>
-                                <td class="mono">@idx</td>
+                                <td class="mono">@idx.Name</td>
+                                <td>
+                                    <span class="badge @IndexKindCss(idx.Type)">@idx.Type</span>
+                                </td>
+                                <td class="mono" style="color:var(--text-dim)">@idx.FieldPath</td>
+                                <td style="font-size:0.82em;color:var(--text-dim)">
+                                    @if (idx.Type == IndexType.Vector)
+                                    {
+                                        <span>@idx.Dimensions dim · @idx.Metric</span>
+                                    }
+                                </td>
                                 <td>
                                     <button class="btn btn-small btn-danger"
-                                            @onclick="() => DropIndex(idx)">
+                                            @onclick="() => DropIndex(idx.Name)">
                                         Drop
                                     </button>
                                 </td>
@@ -73,18 +91,119 @@
             </div>
         }
 
-        @* Create index form *@
-        <h2 style="font-size:14px;margin-bottom:10px">Create index</h2>
-        <div class="toolbar" style="flex-wrap:wrap;gap:8px">
-            <input @bind="_newIndexField" placeholder="Field path (e.g. email)" class="input" style="min-width:200px" />
-            <input @bind="_newIndexName"  placeholder="Index name (optional)" class="input" style="min-width:200px" />
-            <label style="display:flex;align-items:center;gap:6px;color:var(--text-dim);font-size:13px">
-                <input type="checkbox" @bind="_newIndexUnique" /> Unique
-            </label>
-            <button class="btn btn-primary"
-                    @onclick="CreateIndex"
-                    disabled="@string.IsNullOrWhiteSpace(_newIndexField)">
-                Create
+        @* ── Create index form ── *@
+        <h2 style="font-size:14px;margin:14px 0 10px 0">Create index</h2>
+
+        @* Field picker *@
+        <div class="toolbar" style="flex-wrap:wrap;gap:8px;margin-bottom:8px">
+            <div style="display:flex;flex-direction:column;gap:3px;flex:1;min-width:180px">
+                <label style="font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.04em">Field path</label>
+                <input @bind="_newIndexField" @bind:after="OnIndexFieldChanged"
+                       list="field-suggestions"
+                       placeholder="e.g. email, location, embedding"
+                       class="input" />
+                <datalist id="field-suggestions">
+                    @foreach (var f in _fieldSamples)
+                    {
+                        <option value="@f.Path">@f.Type</option>
+                    }
+                </datalist>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:3px;min-width:130px">
+                <label style="font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.04em">Type</label>
+                <select class="input" @bind="_newIndexKind">
+                    <option value="@IndexKind.BTree">BTree</option>
+                    @if (SelectedFieldAllowsVector)
+                    {
+                        <option value="@IndexKind.Vector">Vector (HNSW)</option>
+                    }
+                    @if (SelectedFieldAllowsSpatial)
+                    {
+                        <option value="@IndexKind.Spatial">Spatial (R-Tree)</option>
+                    }
+                </select>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:3px;min-width:160px">
+                <label style="font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.04em">Index name (optional)</label>
+                <input @bind="_newIndexName" placeholder="auto-generated" class="input" />
+            </div>
+        </div>
+
+        @* BTree options *@
+        @if (_newIndexKind == IndexKind.BTree)
+        {
+            <div class="toolbar" style="gap:8px;margin-bottom:8px">
+                <label style="display:flex;align-items:center;gap:6px;color:var(--text-dim);font-size:13px">
+                    <input type="checkbox" @bind="_newIndexUnique" /> Unique constraint
+                </label>
+            </div>
+        }
+
+        @* Vector options *@
+        @if (_newIndexKind == IndexKind.Vector)
+        {
+            <div class="toolbar" style="flex-wrap:wrap;gap:8px;margin-bottom:8px">
+                <div style="display:flex;flex-direction:column;gap:3px">
+                    <label style="font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.04em">Dimensions</label>
+                    <input type="number" @bind="_newVectorDimensions" min="1" max="4096" class="input" style="width:100px" />
+                </div>
+                <div style="display:flex;flex-direction:column;gap:3px">
+                    <label style="font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.04em">Metric</label>
+                    <select class="input" @bind="_newVectorMetric">
+                        <option value="@VectorMetric.Cosine">Cosine</option>
+                        <option value="@VectorMetric.L2">L2 (Euclidean)</option>
+                        <option value="@VectorMetric.DotProduct">Dot Product</option>
+                    </select>
+                </div>
+            </div>
+        }
+
+        <button class="btn btn-primary"
+                @onclick="CreateIndex"
+                disabled="@string.IsNullOrWhiteSpace(_newIndexField)">
+            Create
+        </button>
+
+    </div>
+</details>
+
+@* ── VectorSource Configuration ──────────────────────────────────────────── *@
+<details class="panel">
+    <summary class="panel-title">🧠 Embedding Configuration</summary>
+    <div class="panel-body">
+
+        @if (_vectorSource == null)
+        {
+            <p style="color:var(--text-dim);margin-bottom:12px;font-size:0.9em">
+                No embedding configuration. Add fields below to enable automatic text composition for vector embedding.
+            </p>
+        }
+        else
+        {
+            <div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);padding:10px;margin-bottom:12px">
+                <div style="font-size:0.85em;color:var(--text-dim);margin-bottom:8px">
+                    <strong>Separator:</strong> <code>@_vectorSource.Separator</code><br/>
+                    <strong>Fields:</strong> @_vectorSource.Fields.Count configured
+                </div>
+                <button class="btn btn-small btn-danger" @onclick="ClearVectorSource">Clear Configuration</button>
+            </div>
+        }
+
+        <h2 style="font-size:13px;margin:14px 0 8px 0;font-weight:600">Add field</h2>
+        <div style="display:flex;flex-direction:column;gap:8px">
+            <div class="toolbar" style="flex-wrap:wrap;gap:8px">
+                <input @bind="_newFieldPath" placeholder="Field path (e.g. title)" class="input" style="min-width:150px" />
+                <input @bind="_newFieldPrefix" placeholder="Prefix (optional)" class="input" style="min-width:120px" />
+                <input @bind="_newFieldSuffix" placeholder="Suffix (optional)" class="input" style="min-width:120px" />
+                <button class="btn btn-primary btn-small" 
+                        @onclick="AddVectorSourceField"
+                        disabled="@string.IsNullOrWhiteSpace(_newFieldPath)">
+                    Add Field
+                </button>
+            </div>
+            <input @bind="_vectorSeparator" placeholder="Separator (default: space)" class="input" style="max-width:200px" />
+            <button class="btn btn-primary" @onclick="SaveVectorSource" disabled="@(_vectorSource?.Fields.Count == 0)">
+                Save Configuration
             </button>
         </div>
 
@@ -160,6 +279,9 @@
 </details>
 
 @code {
+    // ── Index kind enum (local, no dependency on BLite types) ──
+    private enum IndexKind { BTree, Vector, Spatial }
+
     [Parameter] public string Collection { get; set; } = "";
     [Parameter, SupplyParameterFromQuery(Name = "db")] public string? DatabaseId { get; set; }
 
@@ -172,10 +294,14 @@
     private bool   _isError;
 
     // ── Indexes ──
-    private IReadOnlyList<string> _indexes = [];
-    private string _newIndexField  = "";
-    private string _newIndexName   = "";
-    private bool   _newIndexUnique;
+    private IReadOnlyList<DynamicIndexDescriptor> _indexDescriptors = [];
+    private IReadOnlyList<StudioService.FieldSample> _fieldSamples = [];
+    private string     _newIndexField      = "";
+    private string     _newIndexName       = "";
+    private bool       _newIndexUnique;
+    private IndexKind  _newIndexKind       = IndexKind.BTree;
+    private int        _newVectorDimensions = 384;
+    private VectorMetric _newVectorMetric  = VectorMetric.Cosine;
 
     // ── BLQL ──
     private string _blqlFilter  = "";
@@ -186,6 +312,13 @@
     private bool   _blqlIsError;
     private List<DocumentRow>? _blqlRows;
     private List<string>       _blqlColumns = [];
+
+    // ── VectorSource ──
+    private VectorSourceConfig? _vectorSource;
+    private string _newFieldPath   = "";
+    private string _newFieldPrefix = "";
+    private string _newFieldSuffix = "";
+    private string _vectorSeparator = " ";
 
     // ── Computed helpers ──
     private string DecodedCollection => Uri.UnescapeDataString(Collection);
@@ -206,6 +339,20 @@
         }
     }
 
+    private StudioService.FieldSample? SelectedField =>
+        _fieldSamples.FirstOrDefault(f =>
+            f.Path.Equals(_newIndexField.Trim(), StringComparison.OrdinalIgnoreCase));
+
+    private bool SelectedFieldAllowsVector  => SelectedField?.IsNumericArray    ?? false;
+    private bool SelectedFieldAllowsSpatial => SelectedField?.IsCoordinateArray ?? false;
+
+    private static string IndexKindCss(IndexType type) => type switch
+    {
+        IndexType.Vector  => "badge-vector",
+        IndexType.Spatial => "badge-spatial",
+        _                 => "badge-btree"
+    };
+
     protected override void OnParametersSet() => Refresh();
 
     private void Refresh()
@@ -213,16 +360,25 @@
         try
         {
             var (count, idType) = Studio.GetCollectionMeta(DbId, DecodedCollection);
-            _docCount = count;
-            _idType   = idType;
-            _indexes  = Studio.ListIndexes(DbId, DecodedCollection);
-            _isError  = false;
+            _docCount         = count;
+            _idType           = idType;
+            _indexDescriptors = Studio.GetIndexDescriptors(DbId, DecodedCollection);
+            _fieldSamples     = Studio.SampleFields(DbId, DecodedCollection);
+            LoadVectorSource();
+            _isError = false;
         }
         catch (Exception ex)
         {
             _message = ex.Message;
             _isError = true;
         }
+    }
+
+    private void OnIndexFieldChanged()
+    {
+        // Reset kind to BTree when field changes; the select options re-render
+        // to show only the allowed types for the new field.
+        _newIndexKind = IndexKind.BTree;
     }
 
     private async Task CreateIndex()
@@ -233,11 +389,31 @@
         {
             var field = _newIndexField.Trim();
             var name  = string.IsNullOrWhiteSpace(_newIndexName) ? null : _newIndexName.Trim();
-            await Studio.CreateIndexAsync(DbId, DecodedCollection, field, name, _newIndexUnique);
-            _message = $"Index on '{field}' created.";
-            _newIndexField  = "";
-            _newIndexName   = "";
-            _newIndexUnique = false;
+
+            switch (_newIndexKind)
+            {
+                case IndexKind.Vector:
+                    await Studio.CreateVectorIndexAsync(
+                        DbId, DecodedCollection, field,
+                        _newVectorDimensions, _newVectorMetric, name);
+                    _message = $"Vector index on '{field}' ({_newVectorDimensions} dim, {_newVectorMetric}) created.";
+                    break;
+                case IndexKind.Spatial:
+                    await Studio.CreateSpatialIndexAsync(DbId, DecodedCollection, field, name);
+                    _message = $"Spatial index on '{field}' created.";
+                    break;
+                default:
+                    await Studio.CreateIndexAsync(DbId, DecodedCollection, field, name, _newIndexUnique);
+                    _message = $"BTree index on '{field}' created.";
+                    break;
+            }
+
+            _newIndexField       = "";
+            _newIndexName        = "";
+            _newIndexUnique      = false;
+            _newIndexKind        = IndexKind.BTree;
+            _newVectorDimensions = 384;
+            _newVectorMetric     = VectorMetric.Cosine;
             Refresh();
         }
         catch (Exception ex) { _message = ex.Message; _isError = true; }
@@ -297,5 +473,72 @@
         _blqlIsError = false;
         _blqlRows    = null;
         _blqlColumns = [];
+    }
+
+    // ── VectorSource handlers ────────────────────────────────────────────────
+
+    private void LoadVectorSource()
+    {
+        try
+        {
+            _vectorSource = Studio.GetVectorSource(DbId, DecodedCollection);
+            _vectorSeparator = _vectorSource?.Separator ?? " ";
+        }
+        catch
+        {
+            _vectorSource = null;
+        }
+    }
+
+    private void AddVectorSourceField()
+    {
+        if (string.IsNullOrWhiteSpace(_newFieldPath))
+            return;
+
+        _vectorSource ??= new VectorSourceConfig();
+        _vectorSource.Fields.Add(new VectorSourceField
+        {
+            Path = _newFieldPath.Trim(),
+            Prefix = string.IsNullOrWhiteSpace(_newFieldPrefix) ? null : _newFieldPrefix,
+            Suffix = string.IsNullOrWhiteSpace(_newFieldSuffix) ? null : _newFieldSuffix
+        });
+
+        _newFieldPath = "";
+        _newFieldPrefix = "";
+        _newFieldSuffix = "";
+        StateHasChanged();
+    }
+
+    private void SaveVectorSource()
+    {
+        _message = "";
+        _isError = false;
+        try
+        {
+            if (_vectorSource?.Fields.Count == 0)
+                _vectorSource = null;
+
+            if (_vectorSource != null)
+                _vectorSource.Separator = string.IsNullOrWhiteSpace(_vectorSeparator) ? " " : _vectorSeparator;
+
+            Studio.SetVectorSource(DbId, DecodedCollection, _vectorSource);
+            _message = _vectorSource == null ? "Configuration cleared." : "Configuration saved.";
+            Refresh();
+        }
+        catch (Exception ex) { _message = ex.Message; _isError = true; }
+    }
+
+    private void ClearVectorSource()
+    {
+        _message = "";
+        _isError = false;
+        try
+        {
+            Studio.SetVectorSource(DbId, DecodedCollection, null);
+            _vectorSource = null;
+            _message = "Configuration cleared.";
+            Refresh();
+        }
+        catch (Exception ex) { _message = ex.Message; _isError = true; }
     }
 }

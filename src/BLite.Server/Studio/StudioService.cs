@@ -10,7 +10,10 @@ using System.IO.Compression;
 using System.Text.Json;
 using BLite.Bson;
 using BLite.Core;
+using BLite.Core.Indexing;
 using BLite.Core.Query.Blql;
+using BLite.Core.Storage;
+using BLite.Core.Text;
 using BLite.Server.Auth;
 using BLite.Server.Embedding;
 
@@ -288,12 +291,69 @@ public sealed class StudioService
 
     // ── Index management ──────────────────────────────────────────────────────
 
+    /// <summary>
+    /// Describes a field discovered by sampling documents in a collection.
+    /// Used to populate the index creation form in the Studio UI.
+    /// </summary>
+    public sealed record FieldSample(string Path, BsonType Type, BsonType? ArrayItemType = null)
+    {
+        /// <summary>True when the array items are numeric (candidate for a Vector index).</summary>
+        public bool IsNumericArray =>
+            Type == BsonType.Array &&
+            (ArrayItemType == BsonType.Double || ArrayItemType == BsonType.Int32 || ArrayItemType == BsonType.Int64);
+
+        /// <summary>True when the array holds [lat, lon] coordinates (candidate for a Spatial index).</summary>
+        public bool IsCoordinateArray =>
+            Type == BsonType.Array &&
+            (ArrayItemType == BsonType.Double || ArrayItemType == BsonType.Int32);
+    }
+
     /// <summary>Returns the names of all secondary indexes on a collection.</summary>
     public IReadOnlyList<string> ListIndexes(string? databaseId, string collection)
     {
         var engine = _registry.GetEngine(databaseId);
         var col    = engine.GetOrCreateCollection(collection);
         return col.ListIndexes();
+    }
+
+    /// <summary>Returns typed descriptors for all secondary indexes of a collection.</summary>
+    public IReadOnlyList<DynamicIndexDescriptor> GetIndexDescriptors(string? databaseId, string collection)
+    {
+        var engine = _registry.GetEngine(databaseId);
+        return engine.GetIndexDescriptors(collection);
+    }
+
+    /// <summary>
+    /// Samples up to <paramref name="sampleSize"/> documents to discover field names and types.
+    /// One entry per unique field name; first type seen wins.
+    /// </summary>
+    public IReadOnlyList<FieldSample> SampleFields(string? databaseId, string collection, int sampleSize = 20)
+    {
+        var engine     = _registry.GetEngine(databaseId);
+        var col        = engine.GetOrCreateCollection(collection);
+        var discovered = new Dictionary<string, (BsonType Type, BsonType? ArrayItemType)>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var doc in col.FindAll().Take(sampleSize))
+        {
+            foreach (var (name, value) in doc.EnumerateFields())
+            {
+                if (name == "_id" || discovered.ContainsKey(name))
+                    continue;
+
+                BsonType? arrayItemType = null;
+                if (value.Type == BsonType.Array)
+                {
+                    var arr = value.AsArray;
+                    arrayItemType = arr.Count > 0 ? arr[0].Type : null;
+                }
+                discovered[name] = (value.Type, arrayItemType);
+            }
+        }
+
+        return discovered
+            .OrderBy(kvp => kvp.Key)
+            .Select(kvp => new FieldSample(kvp.Key, kvp.Value.Type, kvp.Value.ArrayItemType))
+            .ToList();
     }
 
     /// <summary>Creates a secondary B-Tree index on the specified field and commits.</summary>
@@ -305,6 +365,30 @@ public sealed class StudioService
         var engine = _registry.GetEngine(databaseId);
         var col    = engine.GetOrCreateCollection(collection);
         col.CreateIndex(field, string.IsNullOrWhiteSpace(name) ? null : name.Trim(), unique);
+        await engine.CommitAsync(ct);
+    }
+
+    /// <summary>Creates a Vector (HNSW) index on the specified field and commits.</summary>
+    public async Task CreateVectorIndexAsync(
+        string? databaseId, string collection,
+        string field, int dimensions, VectorMetric metric, string? name,
+        CancellationToken ct = default)
+    {
+        var engine = _registry.GetEngine(databaseId);
+        var col    = engine.GetOrCreateCollection(collection);
+        col.CreateVectorIndex(field, dimensions, metric, string.IsNullOrWhiteSpace(name) ? null : name.Trim());
+        await engine.CommitAsync(ct);
+    }
+
+    /// <summary>Creates a Spatial (R-Tree) index on the specified field and commits.</summary>
+    public async Task CreateSpatialIndexAsync(
+        string? databaseId, string collection,
+        string field, string? name,
+        CancellationToken ct = default)
+    {
+        var engine = _registry.GetEngine(databaseId);
+        var col    = engine.GetOrCreateCollection(collection);
+        col.CreateSpatialIndex(field, string.IsNullOrWhiteSpace(name) ? null : name.Trim());
         await engine.CommitAsync(ct);
     }
 
@@ -424,6 +508,74 @@ public sealed class StudioService
 
     /// <summary>Encodes <paramref name="text"/> and returns the L2-normalised float vector.</summary>
     public float[] ComputeEmbedding(string text) => _embedding.Embed(text);
+
+    /// <summary>
+    /// Normalizes <paramref name="text"/> through the standard embedding pipeline:
+    /// ASCII fold → lowercase → punctuation removal → whitespace collapse.
+    /// </summary>
+    public static string NormalizeText(string text) => TextNormalizer.Normalize(text);
+
+    /// <summary>
+    /// Builds the embedding-ready text for <paramref name="document"/> using its
+    /// <see cref="VectorSourceConfig"/>, then normalizes and returns it.
+    /// Returns <see cref="string.Empty"/> if the collection has no VectorSource configured
+    /// or if all fields produce empty text.
+    /// </summary>
+    public string BuildAndNormalizeEmbeddingText(string? databaseId, string collection, BsonDocument document)
+    {
+        var config = GetVectorSource(databaseId, collection);
+        return config == null ? string.Empty : TextNormalizer.BuildEmbeddingText(document, config);
+    }
+
+    /// <summary>
+    /// Normalizes the text and then computes the embedding vector.
+    /// Convenience shortcut for the full pipeline: raw text → normalize → embed.
+    /// </summary>
+    public float[] NormalizeAndEmbed(string text) => _embedding.Embed(TextNormalizer.Normalize(text));
+
+    // ── VectorSource Configuration ────────────────────────────────────────────
+
+    /// <summary>
+    /// Gets the VectorSource configuration for a collection, or null if not configured.
+    /// </summary>
+    public VectorSourceConfig? GetVectorSource(string? databaseId, string collection)
+    {
+        var engine = _registry.GetEngine(databaseId);
+        return engine.GetVectorSource(collection);
+    }
+
+    /// <summary>
+    /// Sets or updates the VectorSource configuration for a collection.
+    /// Pass null to clear the configuration.
+    /// </summary>
+    public void SetVectorSource(string? databaseId, string collection, VectorSourceConfig? config)
+    {
+        var engine = _registry.GetEngine(databaseId);
+        engine.SetVectorSource(collection, config);
+    }
+
+    /// <summary>
+    /// Returns true if the collection has at least one Vector (HNSW) secondary index.
+    /// </summary>
+    public bool HasVectorIndex(string? databaseId, string collection)
+    {
+        var engine = _registry.GetEngine(databaseId);
+        return engine.GetIndexDescriptors(collection).Any(d => d.Type == IndexType.Vector);
+    }
+
+    /// <summary>
+    /// Builds the normalized embedding text for the document with the given <paramref name="id"/>
+    /// using the collection's VectorSource configuration.
+    /// Returns <see cref="string.Empty"/> if the document is not found or no VectorSource is configured.
+    /// </summary>
+    public string BuildEmbeddingTextById(string? databaseId, string collection, BsonId id)
+    {
+        var engine = _registry.GetEngine(databaseId);
+        var doc    = engine.FindById(collection, id);
+        if (doc == null) return string.Empty;
+        var config = engine.GetVectorSource(collection);
+        return config == null ? string.Empty : TextNormalizer.BuildEmbeddingText(doc, config);
+    }
 
     /// <summary>
     /// Parses <paramref name="json"/> and replaces the document with the specified ID.

@@ -103,6 +103,26 @@
                         @(_saving ? "Saving…" : "💾 Save")
                     </button>
                 </div>
+
+                @* ── Embedding preview ── *@
+                @if (_showEmbeddingPanel)
+                {
+                    <details class="embedding-preview" open>
+                        <summary class="embedding-preview-title">🧠 Embedding Text</summary>
+                        <div class="embedding-preview-body">
+                            @if (string.IsNullOrEmpty(_embeddingText))
+                            {
+                                <p style="color:var(--text-dim);font-size:0.85em;margin:0">
+                                    No text produced — check that the configured fields exist in this document.
+                                </p>
+                            }
+                            else
+                            {
+                                <code class="embedding-preview-text">@_embeddingText</code>
+                            }
+                        </div>
+                    </details>
+                }
             }
         </div>
     }
@@ -132,6 +152,10 @@
     private bool   _loadingJson;
     private bool   _saving;
 
+    // Embedding preview panel
+    private bool   _showEmbeddingPanel;
+    private string _embeddingText = "";
+
     protected override async Task OnParametersSetAsync() => await LoadPage();
 
     private async Task LoadPage()
@@ -150,6 +174,11 @@
                 .OrderBy(k => k)
                 .ToList();
 
+            // Check once per page load whether this collection has a vector index + VectorSource
+            _showEmbeddingPanel =
+                Studio.HasVectorIndex(DbId, col) &&
+                Studio.GetVectorSource(DbId, col) != null;
+
             _isError = false;
         }
         catch (Exception ex)
@@ -167,10 +196,14 @@
         _editorMessage = "";
         _editorError   = false;
         _loadingJson   = true;
+        _embeddingText = "";
 
         try
         {
             _editJson = await Studio.GetDocumentAsJsonAsync(DbId, Uri.UnescapeDataString(Collection), id);
+
+            if (_showEmbeddingPanel)
+                _embeddingText = Studio.BuildEmbeddingTextById(DbId, Uri.UnescapeDataString(Collection), id);
         }
         catch (Exception ex) { _editorMessage = ex.Message; _editorError = true; }
         finally  { _loadingJson = false; }
@@ -181,6 +214,7 @@
         _editId        = null;
         _editJson      = "";
         _editorMessage = "";
+        _embeddingText = "";
     }
 
     private async Task SaveDocument()

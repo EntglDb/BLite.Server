@@ -5,6 +5,7 @@
 // Permission checks are enforced by PermissionFilter before handlers run.
 // Errors are modelled with ErrorOr and mapped to RFC-9457 ProblemDetails.
 
+using BLite.Core.Storage;
 using BLite.Server.Auth;
 using BLite.Server.Caching;
 
@@ -141,5 +142,152 @@ internal static class RestApiCollectionsExtensions
             .AddEndpointFilter(new PermissionFilter(BLiteOperation.Drop, checkDb: true))
             .WithSummary("Drop a collection")
             .WithDescription("Permanently removes a collection and all its documents from the specified database. Returns 404 if the collection does not exist.");
+
+        // GET /api/v1/{dbId}/{collection}/vector-source
+        group.MapGet("/{dbId}/{collection}/vector-source",
+            (HttpContext ctx,
+             EngineRegistry registry,
+             string dbId,
+             string collection) =>
+            {
+                var user = (BLiteUser)ctx.Items[nameof(BLiteUser)]!;
+                try
+                {
+                    var physical = NamespaceResolver.Resolve(user, collection);
+                    var engine = registry.GetEngine(RestApiExtensions.NullIfDefault(dbId));
+                    var config = engine.GetVectorSource(physical);
+                    if (config == null)
+                        return Results.NoContent();
+
+                    // Serialize to a simple DTO
+                    var dto = new
+                    {
+                        separator = config.Separator,
+                        fields = config.Fields.Select(f => new
+                        {
+                            path = f.Path,
+                            prefix = f.Prefix,
+                            suffix = f.Suffix
+                        }).ToList()
+                    };
+                    return Results.Ok(dto);
+                }
+                catch (InvalidOperationException ex)
+                {
+                    return Results.Problem(
+                        title: "Not Found",
+                        detail: ex.Message,
+                        statusCode: StatusCodes.Status404NotFound);
+                }
+            })
+            .AddEndpointFilter(new PermissionFilter(BLiteOperation.Query, checkDb: true))
+            .WithSummary("Get VectorSource configuration")
+            .WithDescription("Retrieves the embedding configuration for automatic text composition. Returns 204 if not configured.");
+
+        // PUT /api/v1/{dbId}/{collection}/vector-source
+        group.MapPut("/{dbId}/{collection}/vector-source",
+            (HttpContext ctx,
+             EngineRegistry registry,
+             string dbId,
+             string collection,
+             VectorSourceConfigDto? dto) =>
+            {
+                var user = (BLiteUser)ctx.Items[nameof(BLiteUser)]!;
+                try
+                {
+                    var physical = NamespaceResolver.Resolve(user, collection);
+                    var engine = registry.GetEngine(RestApiExtensions.NullIfDefault(dbId));
+
+                    // dto == null → clear configuration
+                    if (dto == null)
+                    {
+                        engine.SetVectorSource(physical, null);
+                        return Results.NoContent();
+                    }
+
+                    // Build VectorSourceConfig from DTO
+                    var config = new VectorSourceConfig
+                    {
+                        Separator = string.IsNullOrWhiteSpace(dto.Separator) ? " " : dto.Separator
+                    };
+
+                    if (dto.Fields != null)
+                    {
+                        foreach (var fieldDto in dto.Fields)
+                        {
+                            if (!string.IsNullOrWhiteSpace(fieldDto.Path))
+                            {
+                                config.Fields.Add(new VectorSourceField
+                                {
+                                    Path = fieldDto.Path.Trim(),
+                                    Prefix = string.IsNullOrWhiteSpace(fieldDto.Prefix) ? null : fieldDto.Prefix,
+                                    Suffix = string.IsNullOrWhiteSpace(fieldDto.Suffix) ? null : fieldDto.Suffix
+                                });
+                            }
+                        }
+                    }
+
+                    if (config.Fields.Count == 0)
+                    {
+                        return Results.BadRequest(new { error = "At least one field is required." });
+                    }
+
+                    engine.SetVectorSource(physical, config);
+                    return Results.NoContent();
+                }
+                catch (InvalidOperationException ex)
+                {
+                    return Results.Problem(
+                        title: "Not Found",
+                        detail: ex.Message,
+                        statusCode: StatusCodes.Status404NotFound);
+                }
+            })
+            .AddEndpointFilter(new PermissionFilter(BLiteOperation.Update, checkDb: true))
+            .WithSummary("Set VectorSource configuration")
+            .WithDescription("Updates the embedding configuration for automatic text composition. Send null body to clear.");
+
+        // DELETE /api/v1/{dbId}/{collection}/vector-source
+        group.MapDelete("/{dbId}/{collection}/vector-source",
+            (HttpContext ctx,
+             EngineRegistry registry,
+             string dbId,
+             string collection) =>
+            {
+                var user = (BLiteUser)ctx.Items[nameof(BLiteUser)]!;
+                try
+                {
+                    var physical = NamespaceResolver.Resolve(user, collection);
+                    var engine = registry.GetEngine(RestApiExtensions.NullIfDefault(dbId));
+                    engine.SetVectorSource(physical, null);
+                    return Results.NoContent();
+                }
+                catch (InvalidOperationException ex)
+                {
+                    return Results.Problem(
+                        title: "Not Found",
+                        detail: ex.Message,
+                        statusCode: StatusCodes.Status404NotFound);
+                }
+            })
+            .AddEndpointFilter(new PermissionFilter(BLiteOperation.Update, checkDb: true))
+            .WithSummary("Clear VectorSource configuration")
+            .WithDescription("Removes the embedding configuration from the collection.");
     }
+}
+
+/// <summary>
+/// DTO for VectorSource configuration (REST API serialization).
+/// </summary>
+internal class VectorSourceConfigDto
+{
+    public string? Separator { get; set; }
+    public List<VectorSourceFieldDto>? Fields { get; set; }
+}
+
+internal class VectorSourceFieldDto
+{
+    public string? Path { get; set; }
+    public string? Prefix { get; set; }
+    public string? Suffix { get; set; }
 }
