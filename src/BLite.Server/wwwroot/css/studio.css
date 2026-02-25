@@ -60,6 +60,9 @@ body {
     margin-top: auto;
     padding: 12px 16px;
     border-top: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
 }
 
 .source-badge {
@@ -78,6 +81,20 @@ body {
     color: var(--accent);
     border-color: var(--accent);
     background: var(--accent-bg);
+}
+
+button.source-badge {
+    background: transparent;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: inherit;
+    width: 100%;
+}
+
+.sidebar-divider {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 2px 0;
 }
 
 .card-source { border-left: 3px solid var(--accent); }

@@ -10,8 +10,8 @@ using System.IO.Compression;
 using System.Text.Json;
 using BLite.Bson;
 using BLite.Core;
+using BLite.Core.Query.Blql;
 using BLite.Server.Auth;
-using Microsoft.Extensions.Configuration;
 
 namespace BLite.Server.Studio;
 
@@ -21,23 +21,40 @@ namespace BLite.Server.Studio;
 /// </summary>
 public sealed class StudioService
 {
-    private readonly EngineRegistry _registry;
-    private readonly UserRepository _users;
-    private readonly SetupService   _setup;
+    private readonly EngineRegistry      _registry;
+    private readonly UserRepository      _users;
+    private readonly SetupService        _setup;
+    private readonly ApiKeyValidator     _validator;
+    private readonly AuthorizationService _authz;
     private readonly string _sourceUrl;
 
     public StudioService(EngineRegistry registry, UserRepository users,
-        SetupService setup, IConfiguration config)
+        SetupService setup, ApiKeyValidator validator,
+        AuthorizationService authz, IConfiguration config)
     {
         _registry  = registry;
         _users     = users;
         _setup     = setup;
+        _validator = validator;
+        _authz     = authz;
         _sourceUrl = config.GetValue<string>("License:SourceUrl")
                      ?? "https://github.com/blitedb/BLite.Server";
     }
 
     /// <summary>True once the setup wizard has been completed.</summary>
     public bool IsSetupComplete => _setup.IsSetupComplete;
+
+    /// <summary>
+    /// Validates an API key and returns the resolved user if the key is valid,
+    /// the user is active, and the user has Admin access.
+    /// Returns <c>null</c> on any failure.
+    /// </summary>
+    public BLiteUser? ValidateStudioKey(string key)
+    {
+        var user = _validator.Resolve(key);
+        if (user is null || !user.Active) return null;
+        return _authz.CheckPermission(user, "*", BLiteOperation.Admin) ? user : null;
+    }
 
     /// <summary>
     /// Returns the URL where the complete corresponding source code can be obtained,
@@ -110,11 +127,12 @@ public sealed class StudioService
         => _users.LoadAllAsync(ct);
 
     public async Task<string> CreateUserAsync(
-        string username, string? ns, string? databaseId)
+        string username, string? ns, string? databaseId,
+        string collection = "*", BLiteOperation ops = BLiteOperation.None)
     {
         var perms = new List<PermissionEntry>
         {
-            new("*", BLiteOperation.All)
+            new(collection, ops)
         };
         var (_, plainKey) = await _users.CreateAsync(username, ns, perms, databaseId);
         return plainKey;
@@ -253,6 +271,83 @@ public sealed class StudioService
                 b.AddString(name, el.GetRawText());
                 break;
         }
+    }
+
+    // ── Collection metadata ───────────────────────────────────────────────────
+
+    /// <summary>Returns document count and ID type for a single collection.</summary>
+    public (int Count, string IdType) GetCollectionMeta(string? databaseId, string collection)
+    {
+        var engine = _registry.GetEngine(databaseId);
+        var col    = engine.GetOrCreateCollection(collection);
+        return (col.Count(), col.IdType.ToString());
+    }
+
+    // ── Index management ──────────────────────────────────────────────────────
+
+    /// <summary>Returns the names of all secondary indexes on a collection.</summary>
+    public IReadOnlyList<string> ListIndexes(string? databaseId, string collection)
+    {
+        var engine = _registry.GetEngine(databaseId);
+        var col    = engine.GetOrCreateCollection(collection);
+        return col.ListIndexes();
+    }
+
+    /// <summary>Creates a secondary B-Tree index on the specified field and commits.</summary>
+    public async Task CreateIndexAsync(
+        string? databaseId, string collection,
+        string field, string? name, bool unique,
+        CancellationToken ct = default)
+    {
+        var engine = _registry.GetEngine(databaseId);
+        var col    = engine.GetOrCreateCollection(collection);
+        col.CreateIndex(field, string.IsNullOrWhiteSpace(name) ? null : name.Trim(), unique);
+        await engine.CommitAsync(ct);
+    }
+
+    /// <summary>Drops a secondary index by name and commits. Returns false if not found.</summary>
+    public async Task<bool> DropIndexAsync(
+        string? databaseId, string collection, string indexName,
+        CancellationToken ct = default)
+    {
+        var engine = _registry.GetEngine(databaseId);
+        var col    = engine.GetOrCreateCollection(collection);
+        var ok     = col.DropIndex(indexName);
+        if (ok) await engine.CommitAsync(ct);
+        return ok;
+    }
+
+    // ── BLQL query ────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Executes a BLQL query against a collection and returns matching documents as
+    /// <see cref="DocumentRow"/> for display.
+    /// </summary>
+    public Task<List<DocumentRow>> RunBlqlQueryAsync(
+        string? databaseId, string collection,
+        string? filterJson, string? sortJson,
+        int skip, int take,
+        CancellationToken ct = default)
+    {
+        var engine = _registry.GetEngine(databaseId);
+        var col    = engine.GetOrCreateCollection(collection);
+
+        var query = col.Query();
+
+        if (!string.IsNullOrWhiteSpace(filterJson))
+            query = query.Filter(BlqlFilterParser.Parse(filterJson));
+
+        if (!string.IsNullOrWhiteSpace(sortJson))
+            query = query.Sort(sortJson);
+
+        if (skip > 0) query = query.Skip(skip);
+        if (take > 0) query = query.Take(take);
+
+        var rows = new List<DocumentRow>();
+        foreach (var doc in query.AsEnumerable())
+            rows.Add(DocumentToRow(doc));
+
+        return Task.FromResult(rows);
     }
 
     public async Task<List<DocumentRow>> GetDocumentsAsync(

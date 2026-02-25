@@ -11,13 +11,34 @@
         <div class="toolbar">
             <input @bind="_newUsername"  placeholder="Username"              class="input" />
             <input @bind="_newNamespace" placeholder="Namespace (optional)"  class="input" />
-            <select @bind="_newDatabaseId" class="input">
+            <select value="@_newDatabaseId" @onchange="OnNewDatabaseChanged" class="input">
                 <option value="">(default / system)</option>
                 @foreach (var t in _tenants)
                 {
                     <option value="@t.DatabaseId">@t.DatabaseId</option>
                 }
             </select>
+        </div>
+        <div class="toolbar" style="margin-top:8px">
+            <label>Collection:</label>
+            <select @bind="_newCollection" class="input" style="max-width:200px">
+                <option value="*">* (all)</option>
+                @foreach (var c in _newDbCollections)
+                {
+                    <option value="@c">@c</option>
+                }
+            </select>
+            <span style="margin-left:8px">Permissions:</span>
+            @foreach (var op in _allOps)
+            {
+                var capturedOp = op;
+                <label style="display:flex;align-items:center;gap:4px">
+                    <input type="checkbox"
+                           checked="@((_newOps & capturedOp) != 0)"
+                           @onchange="e => ToggleNewOp(capturedOp, (bool)(e.Value ?? false))" />
+                    @op.ToString()[..3]
+                </label>
+            }
             <button class="btn btn-primary" @onclick="CreateUser"
                     disabled="@string.IsNullOrWhiteSpace(_newUsername)">
                 Create
@@ -116,9 +137,22 @@
                             var idx = i;
                             <tr>
                                 <td>
-                                    <input class="input" style="min-width:0;width:100%"
-                                           value="@_editPerms[idx].Collection"
-                                           @onchange="e => SetPermCollection(idx, e.Value?.ToString() ?? string.Empty)" />
+                                    <select class="input" style="min-width:0;width:100%"
+                                            value="@_editPerms[idx].Collection"
+                                            @onchange="e => SetPermCollection(idx, e.Value?.ToString() ?? string.Empty)">
+                                        <option value="*">* (all)</option>
+                                        @foreach (var c in _editCollections)
+                                        {
+                                            <option value="@c">@c</option>
+                                        }
+                                        @{
+                                            var cur = _editPerms[idx].Collection;
+                                            if (cur != "*" && !_editCollections.Contains(cur))
+                                            {
+                                                <option value="@cur">@cur</option>
+                                            }
+                                        }
+                                    </select>
                                 </td>
                                 @foreach (var op in _allOps)
                                 {
@@ -207,10 +241,15 @@
     private string? _deleteTarget;
 
     private BLiteUser?     _editUser;
-    private List<PermEdit> _editPerms   = [];
-    private string         _permMessage = "";
+    private List<PermEdit> _editPerms       = [];
+    private List<string>   _editCollections = [];
+    private string         _permMessage     = "";
     private bool           _permError;
     private bool           _savingPerms;
+
+    private string         _newCollection    = "*";
+    private BLiteOperation _newOps           = BLiteOperation.None;
+    private List<string>   _newDbCollections = [];
 
     private static readonly BLiteOperation[] _allOps =
     [
@@ -248,11 +287,12 @@
 
     private void SelectUser(BLiteUser u)
     {
-        _editUser    = u;
-        _permMessage = "";
-        _editPerms   = u.Permissions
+        _editUser        = u;
+        _permMessage     = "";
+        _editPerms       = u.Permissions
             .Select(p => new PermEdit { Collection = p.Collection, Ops = p.Ops })
             .ToList();
+        _editCollections = LoadCollections(u.DatabaseId);
     }
 
     private void ClosePermPanel() { _editUser = null; _editPerms = []; }
@@ -265,6 +305,27 @@
 
     private void RemovePerm(int idx) => _editPerms.RemoveAt(idx);
     private void SetPermCollection(int idx, string col) => _editPerms[idx].Collection = col;
+
+    private void OnNewDatabaseChanged(ChangeEventArgs e)
+    {
+        _newDatabaseId    = e.Value?.ToString() ?? "";
+        _newDbCollections = LoadCollections(_newDatabaseId);
+        if (!_newDbCollections.Contains(_newCollection))
+            _newCollection = "*";
+    }
+
+    private List<string> LoadCollections(string? dbId)
+    {
+        var id = string.IsNullOrWhiteSpace(dbId) ? null : dbId.Trim();
+        try   { return Studio.ListCollections(id).Select(c => c.Name).ToList(); }
+        catch { return []; }
+    }
+
+    private void ToggleNewOp(BLiteOperation op, bool on)
+    {
+        if (on) _newOps |=  op;
+        else    _newOps &= ~op;
+    }
 
     private void ToggleOp(int idx, BLiteOperation op, bool on)
     {
@@ -306,11 +367,13 @@
     {
         try
         {
-            var ns   = string.IsNullOrWhiteSpace(_newNamespace)  ? null : _newNamespace.Trim();
-            var dbId = string.IsNullOrWhiteSpace(_newDatabaseId) ? null : _newDatabaseId.Trim();
-            var key  = await Studio.CreateUserAsync(_newUsername.Trim(), ns, dbId);
+            var ns         = string.IsNullOrWhiteSpace(_newNamespace)  ? null : _newNamespace.Trim();
+            var dbId       = string.IsNullOrWhiteSpace(_newDatabaseId) ? null : _newDatabaseId.Trim();
+            var collection = string.IsNullOrWhiteSpace(_newCollection) ? "*"  : _newCollection.Trim();
+            var key  = await Studio.CreateUserAsync(_newUsername.Trim(), ns, dbId, collection, _newOps);
             _newApiKey = key; _showKeyModal = true; _copied = false; _message = "";
             _newUsername = _newNamespace = _newDatabaseId = "";
+            _newCollection = "*"; _newOps = BLiteOperation.None; _newDbCollections = [];
             Refresh();
         }
         catch (Exception ex) { _message = ex.Message; _isError = true; }

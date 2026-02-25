@@ -1,0 +1,67 @@
+@page "/login"
+@layout SetupLayout
+@inject StudioService Studio
+@inject SignInTokenCache TokenCache
+@inject NavigationManager Nav
+
+<div class="setup-card">
+    <div class="setup-step">
+        <div class="setup-icon">◆</div>
+        <h1>BLite Studio</h1>
+        <p>Enter your API key to access the management studio.</p>
+
+        <div class="setup-field-group">
+            <label>API Key</label>
+            <input class="setup-input @(_error ? "input-error" : "")"
+                   type="password"
+                   placeholder="Paste your API key"
+                   @bind="_key" @bind:event="oninput"
+                   @onkeydown="OnKeyDown" />
+        </div>
+
+        @if (_error)
+        {
+            <div class="setup-error">Invalid or revoked API key.</div>
+        }
+
+        <div class="setup-actions">
+            <button class="btn btn-primary" @onclick="TryLogin"
+                    disabled="@string.IsNullOrWhiteSpace(_key)">
+                Sign in →
+            </button>
+        </div>
+    </div>
+</div>
+
+@code {
+    private string _key   = string.Empty;
+    private bool   _error;
+
+    protected override void OnInitialized()
+    {
+        if (!Studio.IsSetupComplete)
+            Nav.NavigateTo("/setup");
+    }
+
+    private async Task OnKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await TryLogin();
+    }
+
+    private Task TryLogin()
+    {
+        _error = false;
+        var user = Studio.ValidateStudioKey(_key.Trim());
+        if (user is null)
+        {
+            _error = true;
+            _key   = string.Empty;
+            return Task.CompletedTask;
+        }
+        // Issue a one-time token and redirect to the sign-in HTTP endpoint,
+        // which issues the auth cookie and redirects to the Studio home.
+        var token = TokenCache.Issue(user.Username);
+        Nav.NavigateTo($"/studio/sign-in?t={token}", forceLoad: true);
+        return Task.CompletedTask;
+    }
+}

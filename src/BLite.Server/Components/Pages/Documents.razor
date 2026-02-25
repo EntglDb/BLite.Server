@@ -4,11 +4,13 @@
 <div class="breadcrumb">
     <a href="@CollectionsUrl" class="breadcrumb-link">▤ Collections</a>
     <span class="breadcrumb-sep">›</span>
-    <span class="mono">@Collection</span>
+    <a href="@ManageUrl" class="breadcrumb-link mono">@Uri.UnescapeDataString(Collection)</a>
     @if (!string.IsNullOrEmpty(DatabaseId))
     {
         <span class="breadcrumb-db">(@DatabaseId)</span>
     }
+    <span class="breadcrumb-sep">›</span>
+    <span>Documents</span>
 </div>
 <h1>Documents</h1>
 
@@ -221,6 +223,17 @@
         string.IsNullOrEmpty(DatabaseId)
             ? "/collections"
             : $"/collections/{Uri.EscapeDataString(DatabaseId)}";
+
+    private string ManageUrl
+    {
+        get
+        {
+            var col = Collection; // already URL-encoded as route param
+            return string.IsNullOrEmpty(DatabaseId)
+                ? $"/collection/{col}"
+                : $"/collection/{col}?db={Uri.EscapeDataString(DatabaseId)}";
+        }
+}
 
     private static string FormatId(BLite.Bson.BsonId? id) => id?.ToString() ?? "?";
 }

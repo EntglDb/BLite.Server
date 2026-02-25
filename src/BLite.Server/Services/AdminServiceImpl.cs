@@ -4,7 +4,6 @@
 // All RPCs require the caller to hold BLiteOperation.Admin.
 // The plaintext API key is returned once at creation/rotation and never stored.
 
-using BLite.Core;
 using BLite.Proto.V1;
 using BLite.Server.Auth;
 using Grpc.Core;
@@ -197,5 +196,5 @@ public sealed class AdminServiceImpl : AdminService.AdminServiceBase
 
     private static IReadOnlyList<PermissionEntry> MapPerms(
         IEnumerable<UserPermission> proto) =>
-        proto.Select(p => new PermissionEntry(p.Collection, (BLiteOperation)p.Ops)).ToList();
+        [.. proto.Select(p => new PermissionEntry(p.Collection, (BLiteOperation)p.Ops))];
 }

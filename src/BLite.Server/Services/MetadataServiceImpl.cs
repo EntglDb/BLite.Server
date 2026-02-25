@@ -1,7 +1,6 @@
 // BLite.Server — MetadataService implementation (key-map negotiation)
 // Copyright (C) 2026 Luca Fabbri — AGPL-3.0
 
-using BLite.Core;
 using BLite.Proto.V1;
 using BLite.Server.Auth;
 using Grpc.Core;

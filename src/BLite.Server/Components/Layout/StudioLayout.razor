@@ -1,8 +1,10 @@
 @inherits LayoutComponentBase
 @inject StudioService Studio
 @inject NavigationManager Nav
+@inject AuthenticationStateProvider AuthStateProvider
+@using Microsoft.AspNetCore.Components.Authorization
 
-@if (Studio.IsSetupComplete)
+@if (Studio.IsSetupComplete && _isAuthenticated)
 {
 <div class="studio-root">
     <nav class="studio-sidebar">
@@ -23,6 +25,10 @@
                class="source-badge" title="Source code — AGPL-3.0 §13">
                 🔓 Source Code
             </a>
+            <hr class="sidebar-divider" />
+            <button class="source-badge" title="Sign out of Studio" @onclick="Logout">
+                🚪 Sign out (@_username)
+            </button>
         </div>
     </nav>
     <main class="studio-main">
@@ -32,9 +38,22 @@
 }
 
 @code {
-    protected override void OnInitialized()
+    private bool    _isAuthenticated;
+    private string? _username;
+
+    protected override async Task OnInitializedAsync()
     {
         if (!Studio.IsSetupComplete)
+        {
             Nav.NavigateTo("/setup");
+            return;
+        }
+        var state = await AuthStateProvider.GetAuthenticationStateAsync();
+        _isAuthenticated = state.User.Identity?.IsAuthenticated == true;
+        _username        = state.User.Identity?.Name;
+        if (!_isAuthenticated)
+            Nav.NavigateTo("/login");
     }
+
+    private void Logout() => Nav.NavigateTo("/studio/logout", forceLoad: true);
 }

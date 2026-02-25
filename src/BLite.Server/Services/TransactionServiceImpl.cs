@@ -1,5 +1,4 @@
 using BLite.Proto.V1;
-using BLite.Server.Auth;
 using BLite.Server.Transactions;
 using Grpc.Core;
 

@@ -13,10 +13,11 @@ using BLite.Server.Services;
 using BLite.Server.Studio;
 using BLite.Server.Telemetry;
 using BLite.Server.Transactions;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.OpenApi;
+using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
-using OpenTelemetry.Metrics;
 using Scalar.AspNetCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -33,7 +34,6 @@ var pageConfig = new PageFileConfig
     GrowthBlockSize = Math.Max(1024 * 1024, pageSizeBytes * 64),
     Access = System.IO.MemoryMappedFiles.MemoryMappedFileAccess.ReadWrite
 };
-var rootKey = builder.Configuration.GetValue<string>("Auth:RootKey");
 var otlpEndpoint = builder.Configuration.GetValue<string>("Telemetry:Otlp:Endpoint");
 var telemetryOn = builder.Configuration.GetValue<bool?>("Telemetry:Enabled") ?? true;
 var consoleTelem = builder.Configuration.GetValue<bool?>("Telemetry:Console") ?? builder.Environment.IsDevelopment();
@@ -152,7 +152,21 @@ if (studioEnabled)
 {
     builder.Services.AddRazorComponents()
         .AddInteractiveServerComponents();
+    builder.Services.AddCascadingAuthenticationState();
     builder.Services.AddScoped<StudioService>();
+    builder.Services.AddScoped<StudioSession>();
+    builder.Services.AddSingleton<SignInTokenCache>();
+    // Cookie authentication for the Studio UI
+    builder.Services.AddAuthentication("StudioCookie")
+        .AddCookie("StudioCookie", opts =>
+        {
+            opts.LoginPath        = "/login";
+            opts.Cookie.Name      = "blite_studio";
+            opts.Cookie.HttpOnly  = true;
+            opts.Cookie.SameSite  = SameSiteMode.Lax;
+            opts.ExpireTimeSpan   = TimeSpan.FromDays(7);
+            opts.SlidingExpiration = true;
+        });
 }
 
 // ── Build & configure pipeline ───────────────────────────────────────────────
@@ -166,11 +180,6 @@ if (setupService.IsSetupComplete)
 {
     // Root user was already created via the setup wizard — nothing to do.
     app.Logger.LogInformation("Server setup complete. Root key is managed in the user database.");
-}
-else if (!string.IsNullOrWhiteSpace(rootKey))
-{
-    await userRepo.EnsureRootAsync(rootKey);
-    app.Logger.LogInformation("Root user bootstrapped from appsettings Auth:RootKey.");
 }
 else
 {
@@ -191,6 +200,10 @@ app.UseWhen(
     ctx => ctx.Request.ContentType?.StartsWith("application/grpc") == true,
     branch => branch.UseMiddleware<ApiKeyMiddleware>());
 
+// Cookie auth for Studio UI
+if (studioEnabled)
+    app.UseAuthentication();
+
 // Antiforgery — required by Blazor Server
 if (studioEnabled)
     app.UseAntiforgery();
@@ -203,7 +216,7 @@ app.MapGrpcService<AdminServiceImpl>();
 app.MapGrpcService<TransactionServiceImpl>();
 
 // REST API endpoints (/api/v1/...)
-app.MapRestApi();
+app.MapBliteRestApi();
 
 // OpenAPI spec + Scalar interactive UI (always available so operators can test)
 app.MapOpenApi();
@@ -233,6 +246,31 @@ app.MapGet("/.well-known/source", () => Results.Json(new
 // ── Studio: Blazor Server endpoints ──────────────────────────────────────────
 if (studioEnabled)
 {
+    // Sign-in: Blazor validates the key, issues a one-time token, and redirects here.
+    // This is a real HTTP request, so HttpContext.SignInAsync works fine.
+    app.MapGet("/studio/sign-in", async (HttpContext ctx, string? t, SignInTokenCache cache) =>
+    {
+        if (string.IsNullOrWhiteSpace(t))
+            return Results.Redirect("/login");
+
+        var username = cache.Consume(t);
+        if (username is null)
+            return Results.Redirect("/login");
+
+        var claims    = new[] { new System.Security.Claims.Claim(System.Security.Claims.ClaimTypes.Name, username) };
+        var identity  = new System.Security.Claims.ClaimsIdentity(claims, "StudioCookie");
+        var principal = new System.Security.Claims.ClaimsPrincipal(identity);
+        await ctx.SignInAsync("StudioCookie", principal);
+        return Results.Redirect("/");
+    });
+
+    // Sign-out: clears the cookie and returns to the login page.
+    app.MapGet("/studio/logout", async (HttpContext ctx) =>
+    {
+        await ctx.SignOutAsync("StudioCookie");
+        return Results.Redirect("/login");
+    });
+
     app.MapRazorComponents<App>()
         .AddInteractiveServerRenderMode();
     app.Logger.LogInformation(

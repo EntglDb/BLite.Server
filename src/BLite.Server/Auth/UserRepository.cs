@@ -200,7 +200,7 @@ public sealed class UserRepository
     }
 
     public IReadOnlyList<BLiteUser> ListAll()
-        => _byKey.Values.OrderBy(u => u.Username).ToList();
+        => [.. _byKey.Values.OrderBy(u => u.Username)];
 
     // ── Load from storage ─────────────────────────────────────────────────────
 
@@ -268,7 +268,7 @@ public sealed class UserRepository
         {
             var proto = MessagePackSerializer.Deserialize<List<PermProto>>(
                 Convert.FromBase64String(permsB64));
-            perms = proto.Select(p => new PermissionEntry(p.C, (BLiteOperation)p.O)).ToList();
+            perms = [.. proto.Select(p => new PermissionEntry(p.C, (BLiteOperation)p.O))];
         }
         catch { /* corrupt entry — treat as no permissions */ }
 
@@ -324,5 +324,5 @@ public sealed class UserRepository
     }
 
     private static List<PermProto> ToProtoPerms(IReadOnlyList<PermissionEntry> perms)
-        => perms.Select(p => new PermProto { C = p.Collection, O = (int)p.Ops }).ToList();
+        => [.. perms.Select(p => new PermProto { C = p.Collection, O = (int)p.Ops })];
 }

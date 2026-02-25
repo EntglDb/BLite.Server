@@ -5,7 +5,6 @@
 // State is persisted in a small JSON file placed next to the main database.
 
 using System.Text.Json;
-using Microsoft.Extensions.Configuration;
 
 namespace BLite.Server.Studio;
 

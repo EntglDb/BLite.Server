@@ -66,6 +66,7 @@
                 <tr>
                     <td class="mono">@c.Name</td>
                     <td>
+                        <a href="@ManageUrl(c.Name)" class="btn btn-small">Manage</a>
                         <a href="@DocumentsUrl(c.Name)" class="btn btn-small">Browse</a>
                         <button class="btn btn-small btn-danger"
                                 @onclick="() => Drop(c.Name)">
@@ -120,6 +121,14 @@
         DatabaseId = e.Value?.ToString();
         if (string.IsNullOrEmpty(DatabaseId)) DatabaseId = null;
         Refresh();
+    }
+
+    private string ManageUrl(string col)
+    {
+        var colEncoded = Uri.EscapeDataString(col);
+        if (string.IsNullOrEmpty(DatabaseId))
+            return $"/collection/{colEncoded}";
+        return $"/collection/{colEncoded}?db={Uri.EscapeDataString(DatabaseId)}";
     }
 
     private string DocumentsUrl(string col)

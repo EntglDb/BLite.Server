@@ -1,0 +1,301 @@
+@page "/collection/{Collection}"
+@inject StudioService Studio
+
+<div class="breadcrumb">
+    <a href="@CollectionsUrl" class="breadcrumb-link">▤ Collections</a>
+    <span class="breadcrumb-sep">›</span>
+    <span class="mono">@DecodedCollection</span>
+    @if (!string.IsNullOrEmpty(DatabaseId))
+    {
+        <span class="breadcrumb-db">(@DatabaseId)</span>
+    }
+</div>
+<h1>Collection: @DecodedCollection</h1>
+
+@if (!string.IsNullOrEmpty(_message))
+{
+    <div class="alert @(_isError ? "alert-error" : "alert-ok")">@_message</div>
+}
+
+@* ── Metadata ────────────────────────────────────────────────────────────── *@
+<div class="card-grid" style="margin-bottom:20px">
+    <div class="card">
+        <div class="card-label">Documents</div>
+        <div class="card-value">@_docCount</div>
+    </div>
+    <div class="card">
+        <div class="card-label">ID Type</div>
+        <div class="card-value mono" style="font-size:15px">@_idType</div>
+    </div>
+    <div class="card">
+        <div class="card-label">Indexes</div>
+        <div class="card-value">@_indexes.Count</div>
+    </div>
+    <div class="card" style="display:flex;align-items:center">
+        <a href="@DocumentsUrl" class="btn btn-primary">Browse Documents</a>
+    </div>
+</div>
+
+@* ── Index management ────────────────────────────────────────────────────── *@
+<details class="panel" open>
+    <summary class="panel-title">⚡ Indexes</summary>
+    <div class="panel-body">
+
+        @if (_indexes.Count == 0)
+        {
+            <p class="empty" style="text-align:left;padding:8px 0">No secondary indexes defined.</p>
+        }
+        else
+        {
+            <div class="table-scroll" style="margin-bottom:14px">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Index name</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var idx in _indexes)
+                        {
+                            <tr>
+                                <td class="mono">@idx</td>
+                                <td>
+                                    <button class="btn btn-small btn-danger"
+                                            @onclick="() => DropIndex(idx)">
+                                        Drop
+                                    </button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+
+        @* Create index form *@
+        <h2 style="font-size:14px;margin-bottom:10px">Create index</h2>
+        <div class="toolbar" style="flex-wrap:wrap;gap:8px">
+            <input @bind="_newIndexField" placeholder="Field path (e.g. email)" class="input" style="min-width:200px" />
+            <input @bind="_newIndexName"  placeholder="Index name (optional)" class="input" style="min-width:200px" />
+            <label style="display:flex;align-items:center;gap:6px;color:var(--text-dim);font-size:13px">
+                <input type="checkbox" @bind="_newIndexUnique" /> Unique
+            </label>
+            <button class="btn btn-primary"
+                    @onclick="CreateIndex"
+                    disabled="@string.IsNullOrWhiteSpace(_newIndexField)">
+                Create
+            </button>
+        </div>
+
+    </div>
+</details>
+
+@* ── BLQL Query ──────────────────────────────────────────────────────────── *@
+<details class="panel">
+    <summary class="panel-title">🔎 BLQL Query</summary>
+    <div class="panel-body">
+
+        <div class="toolbar" style="flex-wrap:wrap;align-items:flex-start;gap:12px">
+            <div style="display:flex;flex-direction:column;gap:4px;flex:1;min-width:240px">
+                <label class="toolbar-label">Filter (JSON)</label>
+                <textarea @bind="_blqlFilter" class="json-editor"
+                          style="min-height:80px"
+                          placeholder='{ "status": "active" }'></textarea>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:4px;flex:1;min-width:200px">
+                <label class="toolbar-label">Sort (JSON)</label>
+                <textarea @bind="_blqlSort" class="json-editor"
+                          style="min-height:80px"
+                          placeholder='{ "name": 1 }'></textarea>
+            </div>
+        </div>
+
+        <div class="toolbar" style="margin-top:8px;gap:10px">
+            <label class="toolbar-label">Skip</label>
+            <input type="number" @bind="_blqlSkip" min="0" class="input" style="width:90px" />
+            <label class="toolbar-label">Take</label>
+            <input type="number" @bind="_blqlTake" min="1" max="1000" class="input" style="width:90px" />
+            <button class="btn btn-primary" @onclick="RunBlqlQuery">Run query</button>
+            <button class="btn" @onclick="ClearBlqlQuery">Clear</button>
+        </div>
+
+        @if (!string.IsNullOrEmpty(_blqlMessage))
+        {
+            <div class="alert @(_blqlIsError ? "alert-error" : "alert-ok")" style="margin-top:12px">
+                @_blqlMessage
+            </div>
+        }
+
+        @if (_blqlRows is { Count: > 0 })
+        {
+            <div class="table-scroll" style="margin-top:12px">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>_id</th>
+                            @foreach (var col in _blqlColumns)
+                            {
+                                <th>@col</th>
+                            }
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var row in _blqlRows)
+                        {
+                            <tr>
+                                <td class="mono">@row.Id</td>
+                                @foreach (var col in _blqlColumns)
+                                {
+                                    <td>@(row.Fields.GetValueOrDefault(col, ""))</td>
+                                }
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+
+    </div>
+</details>
+
+@code {
+    [Parameter] public string Collection { get; set; } = "";
+    [Parameter, SupplyParameterFromQuery(Name = "db")] public string? DatabaseId { get; set; }
+
+    // ── Metadata ──
+    private int    _docCount;
+    private string _idType = "";
+
+    // ── Alerts ──
+    private string _message = "";
+    private bool   _isError;
+
+    // ── Indexes ──
+    private IReadOnlyList<string> _indexes = [];
+    private string _newIndexField  = "";
+    private string _newIndexName   = "";
+    private bool   _newIndexUnique;
+
+    // ── BLQL ──
+    private string _blqlFilter  = "";
+    private string _blqlSort    = "";
+    private int    _blqlSkip    = 0;
+    private int    _blqlTake    = 100;
+    private string _blqlMessage = "";
+    private bool   _blqlIsError;
+    private List<DocumentRow>? _blqlRows;
+    private List<string>       _blqlColumns = [];
+
+    // ── Computed helpers ──
+    private string DecodedCollection => Uri.UnescapeDataString(Collection);
+    private string? DbId => string.IsNullOrEmpty(DatabaseId) ? null : Uri.UnescapeDataString(DatabaseId);
+
+    private string CollectionsUrl => string.IsNullOrEmpty(DatabaseId)
+        ? "/collections"
+        : $"/collections/{Uri.EscapeDataString(DatabaseId)}";
+
+    private string DocumentsUrl
+    {
+        get
+        {
+            var col = Uri.EscapeDataString(DecodedCollection);
+            return string.IsNullOrEmpty(DatabaseId)
+                ? $"/documents/{col}"
+                : $"/documents/{col}?db={Uri.EscapeDataString(DatabaseId)}";
+        }
+    }
+
+    protected override void OnParametersSet() => Refresh();
+
+    private void Refresh()
+    {
+        try
+        {
+            var (count, idType) = Studio.GetCollectionMeta(DbId, DecodedCollection);
+            _docCount = count;
+            _idType   = idType;
+            _indexes  = Studio.ListIndexes(DbId, DecodedCollection);
+            _isError  = false;
+        }
+        catch (Exception ex)
+        {
+            _message = ex.Message;
+            _isError = true;
+        }
+    }
+
+    private async Task CreateIndex()
+    {
+        _message = "";
+        _isError = false;
+        try
+        {
+            var field = _newIndexField.Trim();
+            var name  = string.IsNullOrWhiteSpace(_newIndexName) ? null : _newIndexName.Trim();
+            await Studio.CreateIndexAsync(DbId, DecodedCollection, field, name, _newIndexUnique);
+            _message = $"Index on '{field}' created.";
+            _newIndexField  = "";
+            _newIndexName   = "";
+            _newIndexUnique = false;
+            Refresh();
+        }
+        catch (Exception ex) { _message = ex.Message; _isError = true; }
+    }
+
+    private async Task DropIndex(string indexName)
+    {
+        _message = "";
+        _isError = false;
+        try
+        {
+            var ok = await Studio.DropIndexAsync(DbId, DecodedCollection, indexName);
+            _message = ok
+                ? $"Index '{indexName}' dropped."
+                : $"Index '{indexName}' not found.";
+            _isError = !ok;
+            Refresh();
+        }
+        catch (Exception ex) { _message = ex.Message; _isError = true; }
+    }
+
+    private async Task RunBlqlQuery()
+    {
+        _blqlMessage = "";
+        _blqlIsError = false;
+        _blqlRows    = null;
+        _blqlColumns = [];
+        try
+        {
+            var rows = await Studio.RunBlqlQueryAsync(
+                DbId, DecodedCollection,
+                string.IsNullOrWhiteSpace(_blqlFilter) ? null : _blqlFilter.Trim(),
+                string.IsNullOrWhiteSpace(_blqlSort)   ? null : _blqlSort.Trim(),
+                _blqlSkip, _blqlTake);
+
+            _blqlRows = rows;
+            _blqlColumns = rows
+                .SelectMany(r => r.Fields.Keys)
+                .Distinct()
+                .OrderBy(k => k)
+                .ToList();
+
+            _blqlMessage = rows.Count == 0
+                ? "No documents matched."
+                : $"{rows.Count} document{(rows.Count == 1 ? "" : "s")} matched.";
+        }
+        catch (Exception ex) { _blqlMessage = ex.Message; _blqlIsError = true; }
+    }
+
+    private void ClearBlqlQuery()
+    {
+        _blqlFilter  = "";
+        _blqlSort    = "";
+        _blqlSkip    = 0;
+        _blqlTake    = 100;
+        _blqlMessage = "";
+        _blqlIsError = false;
+        _blqlRows    = null;
+        _blqlColumns = [];
+    }
+}
