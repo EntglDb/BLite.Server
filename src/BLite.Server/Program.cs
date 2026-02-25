@@ -8,6 +8,7 @@ using BLite.Core.Storage;
 using BLite.Server;
 using BLite.Server.Auth;
 using BLite.Server.Components;
+using BLite.Server.Embedding;
 using BLite.Server.Rest;
 using BLite.Server.Services;
 using BLite.Server.Caching;
@@ -58,6 +59,9 @@ builder.Services.AddSingleton<UserRepository>(sp =>
     new UserRepository(sp.GetRequiredService<EngineRegistry>().SystemEngine));
 builder.Services.AddSingleton<ApiKeyValidator>();
 builder.Services.AddSingleton<AuthorizationService>();
+
+// Embedding service
+builder.Services.AddSingleton<EmbeddingService>();
 
 // REST API
 builder.Services.AddScoped<RestAuthFilter>();

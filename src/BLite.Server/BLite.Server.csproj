@@ -29,7 +29,9 @@
     <!-- MessagePack for QueryDescriptor deserialization -->
     <PackageReference Include="MessagePack" Version="3.1.4" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.*" />
-    <PackageReference Include="Microsoft.OpenApi" Version="2.*" />
+    <!-- Embedding: ONNX inference + HuggingFace tokenizer -->
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.24.2" />
+    <PackageReference Include="Microsoft.ML.Tokenizers" Version="2.0.0" />
     <!-- OpenTelemetry -->
     <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.15.0" />
     <PackageReference Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.15.0" />

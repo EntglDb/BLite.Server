@@ -1,0 +1,257 @@
+@page "/embedding"
+@inject StudioService Studio
+@inject IJSRuntime JS
+
+<h1>🧠 Embedding</h1>
+
+@{
+    var info = Studio.GetEmbeddingModelInfo();
+}
+
+<div class="panel" style="margin-bottom: 16px">
+    <div class="panel-body">
+        <div class="toolbar">
+            <span>Model:</span>
+            <span class="mono" style="flex: 1">@info.ModelName</span>
+            <span>Dimension:</span>
+            <span class="mono badge badge-active">@info.Dimension</span>
+        </div>
+        <div class="toolbar" style="margin-top: 8px">
+            <span>Directory:</span>
+            <span class="mono" style="flex: 1; word-break: break-all; color: var(--text-dim)">@info.Directory</span>
+        </div>
+    </div>
+</div>
+
+@if (!string.IsNullOrEmpty(_message))
+{
+    <div class="alert @(_isError ? "alert-error" : "alert-ok")" style="margin-bottom: 16px">@_message</div>
+}
+
+<details class="panel" style="margin-bottom: 16px">
+    <summary class="panel-title">📂 Load Model from Directory</summary>
+    <div class="panel-body">
+        <p style="margin: 0 0 12px 0; font-size: 0.9em; color: var(--text-dim)">
+            Full path to a directory containing <code>model.onnx</code> and <code>tokenizer.json</code>.
+        </p>
+        <div class="toolbar">
+            <input @bind="_directory"
+                   placeholder="e.g. /models/all-MiniLM-L6-v2"
+                   class="input"
+                   style="flex: 1" />
+            <button class="btn btn-primary" @onclick="LoadModel" disabled="@string.IsNullOrWhiteSpace(_directory)">
+                Load
+            </button>
+        </div>
+    </div>
+</details>
+
+<details class="panel" open>
+    <summary class="panel-title">🔬 Test Embedding</summary>
+    <div class="panel-body">
+
+        @* ── Text A ───────────────────────────────────────────────────────── *@
+        <div style="margin-bottom: 12px">
+            <div class="toolbar" style="margin-bottom: 6px">
+                <span style="min-width: 20px; font-weight: 600; color: var(--accent)">A</span>
+                <input @bind="_textA"
+                       @bind:event="oninput"
+                       placeholder="First text…"
+                       class="input"
+                       style="flex: 1" />
+                <button class="btn btn-primary btn-small" @onclick="ComputeA"
+                        disabled="@(string.IsNullOrWhiteSpace(_textA) || _computingA)">
+                    @(_computingA ? "…" : "Embed")
+                </button>
+            </div>
+            @if (_vectorA is not null)
+            {
+                <div class="toolbar" style="font-size: 0.85em; color: var(--text-dim); padding-left: 28px">
+                    <span>
+                        dim <strong>@_vectorA.Length</strong>
+                        &nbsp;·&nbsp; min <strong class="mono">@_vectorA.Min().ToString("F4")</strong>
+                        &nbsp;·&nbsp; max <strong class="mono">@_vectorA.Max().ToString("F4")</strong>
+                        &nbsp;·&nbsp; mean <strong class="mono">@_vectorA.Average().ToString("F4")</strong>
+                        &nbsp;·&nbsp; <strong class="mono">@_elapsedA.TotalMilliseconds.ToString("F1") ms</strong>
+                    </span>
+                    <button class="btn btn-small" @onclick="() => CopyVector(_vectorA)" title="Copy vector A as JSON">
+                        📋
+                    </button>
+                </div>
+                <div class="mono" style="
+                    background: var(--bg); border: 1px solid var(--border);
+                    border-radius: var(--radius); padding: 8px 12px 8px 28px;
+                    font-size: 0.75em; line-height: 1.7; overflow-x: auto; white-space: nowrap; margin-top: 4px">
+                    @BuildPreview(_vectorA)
+                </div>
+            }
+        </div>
+
+        @* ── Text B ───────────────────────────────────────────────────────── *@
+        <div style="margin-bottom: 12px">
+            <div class="toolbar" style="margin-bottom: 6px">
+                <span style="min-width: 20px; font-weight: 600; color: var(--orange)">B</span>
+                <input @bind="_textB"
+                       @bind:event="oninput"
+                       placeholder="Second text…"
+                       class="input"
+                       style="flex: 1" />
+                <button class="btn btn-primary btn-small" @onclick="ComputeB"
+                        disabled="@(string.IsNullOrWhiteSpace(_textB) || _computingB)">
+                    @(_computingB ? "…" : "Embed")
+                </button>
+            </div>
+            @if (_vectorB is not null)
+            {
+                <div class="toolbar" style="font-size: 0.85em; color: var(--text-dim); padding-left: 28px">
+                    <span>
+                        dim <strong>@_vectorB.Length</strong>
+                        &nbsp;·&nbsp; min <strong class="mono">@_vectorB.Min().ToString("F4")</strong>
+                        &nbsp;·&nbsp; max <strong class="mono">@_vectorB.Max().ToString("F4")</strong>
+                        &nbsp;·&nbsp; mean <strong class="mono">@_vectorB.Average().ToString("F4")</strong>
+                        &nbsp;·&nbsp; <strong class="mono">@_elapsedB.TotalMilliseconds.ToString("F1") ms</strong>
+                    </span>
+                    <button class="btn btn-small" @onclick="() => CopyVector(_vectorB)" title="Copy vector B as JSON">
+                        📋
+                    </button>
+                </div>
+                <div class="mono" style="
+                    background: var(--bg); border: 1px solid var(--border);
+                    border-radius: var(--radius); padding: 8px 12px 8px 28px;
+                    font-size: 0.75em; line-height: 1.7; overflow-x: auto; white-space: nowrap; margin-top: 4px">
+                    @BuildPreview(_vectorB)
+                </div>
+            }
+        </div>
+
+        @* ── Cosine Similarity ────────────────────────────────────────────── *@
+        @if (_vectorA is not null && _vectorB is not null)
+        {
+            var sim = CosineSimilarity(_vectorA, _vectorB);
+            var simColor = sim >= 0.8f ? "var(--green)" : sim >= 0.5f ? "var(--orange)" : "var(--red)";
+            var simLabel = sim >= 0.8f ? "Very similar" : sim >= 0.5f ? "Somewhat similar" : sim >= 0.2f ? "Weakly similar" : "Dissimilar";
+
+            <div style="
+                border-top: 1px solid var(--border);
+                margin-top: 8px; padding-top: 14px;
+                display: flex; align-items: center; gap: 16px">
+                <span style="font-size: 0.9em; color: var(--text-dim)">Cosine Similarity (A · B):</span>
+                <span class="mono" style="font-size: 1.6em; font-weight: 700; color: @simColor">
+                    @sim.ToString("F4")
+                </span>
+                <span class="badge" style="background: @simColor; color: var(--bg); font-size: 0.8em">
+                    @simLabel
+                </span>
+            </div>
+        }
+
+    </div>
+</details>
+
+@code {
+    private const int PreviewCount = 12;
+
+    private string _directory = "";
+    private string _message = "";
+    private bool _isError = false;
+
+    private string _textA = "";
+    private string _textB = "";
+    private bool _computingA = false;
+    private bool _computingB = false;
+    private float[]? _vectorA;
+    private float[]? _vectorB;
+    private TimeSpan _elapsedA;
+    private TimeSpan _elapsedB;
+
+    private async Task LoadModel()
+    {
+        _message = "";
+        _isError = false;
+        _vectorA = null;
+        _vectorB = null;
+
+        try
+        {
+            Studio.LoadEmbeddingModel(_directory);
+            _message = $"✓ Model loaded from '{_directory}'";
+            _directory = "";
+        }
+        catch (DirectoryNotFoundException ex)
+        {
+            _message = ex.Message;
+            _isError = true;
+        }
+        catch (FileNotFoundException ex)
+        {
+            _message = ex.Message;
+            _isError = true;
+        }
+        catch (Exception ex)
+        {
+            _message = ex.Message;
+            _isError = true;
+        }
+
+        await Task.CompletedTask;
+    }
+
+    private async Task ComputeA()
+    {
+        if (string.IsNullOrWhiteSpace(_textA)) return;
+        _computingA = true;
+        _vectorA = null;
+        StateHasChanged();
+        try
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            _vectorA = await Task.Run(() => Studio.ComputeEmbedding(_textA));
+            _elapsedA = sw.Elapsed;
+        }
+        catch (Exception ex) { _message = ex.Message; _isError = true; }
+        finally { _computingA = false; }
+    }
+
+    private async Task ComputeB()
+    {
+        if (string.IsNullOrWhiteSpace(_textB)) return;
+        _computingB = true;
+        _vectorB = null;
+        StateHasChanged();
+        try
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            _vectorB = await Task.Run(() => Studio.ComputeEmbedding(_textB));
+            _elapsedB = sw.Elapsed;
+        }
+        catch (Exception ex) { _message = ex.Message; _isError = true; }
+        finally { _computingB = false; }
+    }
+
+    private async Task CopyVector(float[] v)
+    {
+        var json = "[" + string.Join(", ", v.Select(x => x.ToString("G6"))) + "]";
+        await JS.InvokeVoidAsync("navigator.clipboard.writeText", json);
+    }
+
+    // Dot product of two L2-normalised vectors = cosine similarity.
+    private static float CosineSimilarity(float[] a, float[] b)
+    {
+        float dot = 0f;
+        int len = Math.Min(a.Length, b.Length);
+        for (int i = 0; i < len; i++)
+            dot += a[i] * b[i];
+        return Math.Clamp(dot, -1f, 1f);
+    }
+
+    private static string BuildPreview(float[] v)
+    {
+        if (v.Length <= PreviewCount * 2)
+            return string.Join(",  ", v.Select(f => f.ToString("F4")));
+
+        var head = v.Take(PreviewCount).Select(f => f.ToString("F4"));
+        var tail = v.TakeLast(PreviewCount).Select(f => f.ToString("F4"));
+        return string.Join(",  ", head) + $",  … ({v.Length - PreviewCount * 2} more) …  " + string.Join(",  ", tail);
+    }
+}
+

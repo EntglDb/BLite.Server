@@ -12,6 +12,7 @@ using BLite.Bson;
 using BLite.Core;
 using BLite.Core.Query.Blql;
 using BLite.Server.Auth;
+using BLite.Server.Embedding;
 
 namespace BLite.Server.Studio;
 
@@ -26,17 +27,19 @@ public sealed class StudioService
     private readonly SetupService        _setup;
     private readonly ApiKeyValidator     _validator;
     private readonly AuthorizationService _authz;
+    private readonly EmbeddingService    _embedding;
     private readonly string _sourceUrl;
 
     public StudioService(EngineRegistry registry, UserRepository users,
         SetupService setup, ApiKeyValidator validator,
-        AuthorizationService authz, IConfiguration config)
+        AuthorizationService authz, EmbeddingService embedding, IConfiguration config)
     {
         _registry  = registry;
         _users     = users;
         _setup     = setup;
         _validator = validator;
         _authz     = authz;
+        _embedding = embedding;
         _sourceUrl = config.GetValue<string>("License:SourceUrl")
                      ?? "https://github.com/blitedb/BLite.Server";
     }
@@ -398,9 +401,29 @@ public sealed class StudioService
     {
         var engine = _registry.GetEngine(databaseId);
         var doc    = await engine.FindByIdAsync(collection, id, ct);
-        if (doc is null) throw new KeyNotFoundException($"Document {id} not found.");
-        return BsonJsonConverter.ToJson(doc, indented: true);
+        return doc is null ? null : BsonJsonConverter.ToJson(doc, indented: true);
     }
+
+    // ── Embedding ────────────────────────────────────────────────────────────
+
+    /// <summary>Returns information about the currently loaded embedding model.</summary>
+    public EmbeddingModelInfo GetEmbeddingModelInfo() => _embedding.Info;
+
+    /// <summary>
+    /// Loads a new embedding model from the specified directory.
+    /// Throws if model.onnx or tokenizer.json are missing.
+    /// </summary>
+    public void LoadEmbeddingModel(string directory)
+    {
+        var fullPath = Path.GetFullPath(directory);
+        if (!Directory.Exists(fullPath))
+            throw new DirectoryNotFoundException($"Directory '{fullPath}' does not exist.");
+
+        _embedding.LoadFromDirectory(fullPath);
+    }
+
+    /// <summary>Encodes <paramref name="text"/> and returns the L2-normalised float vector.</summary>
+    public float[] ComputeEmbedding(string text) => _embedding.Embed(text);
 
     /// <summary>
     /// Parses <paramref name="json"/> and replaces the document with the specified ID.
