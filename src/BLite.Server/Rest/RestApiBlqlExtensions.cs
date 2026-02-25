@@ -9,6 +9,9 @@ using BLite.Bson;
 using BLite.Core;
 using BLite.Core.Query.Blql;
 using BLite.Server.Auth;
+using BLite.Server.Caching;
+using BLite.Server.Transactions;
+using Microsoft.Extensions.Options;
 using System.Text.Json.Nodes;
 
 namespace BLite.Server.Rest;
@@ -50,12 +53,16 @@ internal static class RestApiBlqlExtensions
         group.MapPost("/{dbId}/{collection}/query",
             async (HttpContext ctx,
                    EngineRegistry registry,
+                   QueryCacheService cache,
+                   IOptions<QueryCacheOptions> cacheOpts,
+                   TransactionManager txnManager,
                    string dbId,
                    string collection,
                    CancellationToken ct) =>
             {
                 var user = (BLiteUser)ctx.Items[nameof(BLiteUser)]!;
                 var physical = NamespaceResolver.Resolve(user, collection);
+                var realDb = RestApiExtensions.NullIfDefault(dbId);
 
                 string body;
                 try
@@ -64,6 +71,14 @@ internal static class RestApiBlqlExtensions
                     body = await reader.ReadToEndAsync(ct);
                 }
                 catch (Exception ex) { return BLiteErrors.InvalidJson(ex.Message).ToResult(); }
+
+                var cacheKey = QueryCacheKeys.BlqlPost(realDb, physical, body ?? string.Empty);
+                if (cache.Enabled
+                    && !txnManager.HasActiveTransaction(realDb))
+                {
+                    if (cache.TryGet(cacheKey, out object? hit))
+                        return Results.Ok(hit);
+                }
 
                 BlqlFilter filter = BlqlFilter.Empty;
                 BlqlSort? sort = null;
@@ -127,7 +142,7 @@ internal static class RestApiBlqlExtensions
 
                 try
                 {
-                    var engine = registry.GetEngine(RestApiExtensions.NullIfDefault(dbId));
+                    var engine = registry.GetEngine(realDb);
                     var col = engine.GetOrCreateCollection(physical);
 
                     var query = col.Query().Filter(filter);
@@ -138,7 +153,11 @@ internal static class RestApiBlqlExtensions
                         .Select(d => JsonNode.Parse(BsonJsonConverter.ToJson(d, indented: false)))
                         .ToList();
 
-                    return Results.Ok(new { count = docs.Count, skip, limit, documents = docs });
+                    var result = new { count = docs.Count, skip, limit, documents = docs };
+                    if (cache.Enabled && docs.Count <= cacheOpts.Value.MaxResultSetSize)
+                        cache.Set(cacheKey, result, realDb, physical);
+
+                    return Results.Ok(result);
                 }
                 catch (InvalidOperationException ex)
                 {
@@ -164,6 +183,9 @@ internal static class RestApiBlqlExtensions
         group.MapGet("/{dbId}/{collection}/query",
             (HttpContext ctx,
              EngineRegistry registry,
+             QueryCacheService cache,
+             IOptions<QueryCacheOptions> cacheOpts,
+             TransactionManager txnManager,
              string dbId,
              string collection,
              string? filter,
@@ -173,8 +195,17 @@ internal static class RestApiBlqlExtensions
             {
                 var user = (BLiteUser)ctx.Items[nameof(BLiteUser)]!;
                 var physical = NamespaceResolver.Resolve(user, collection);
+                var realDb = RestApiExtensions.NullIfDefault(dbId);
 
                 if (limit <= 0 || limit > 1000) limit = 50;
+
+                var cacheKey = QueryCacheKeys.BlqlGet(realDb, physical, filter, sort, skip, limit);
+                if (cache.Enabled
+                    && !txnManager.HasActiveTransaction(realDb))
+                {
+                    if (cache.TryGet(cacheKey, out object? hit))
+                        return Results.Ok(hit);
+                }
 
                 BlqlFilter blqlFilter = BlqlFilter.Empty;
                 BlqlSort? blqlSort = null;
@@ -199,7 +230,7 @@ internal static class RestApiBlqlExtensions
 
                 try
                 {
-                    var engine = registry.GetEngine(RestApiExtensions.NullIfDefault(dbId));
+                    var engine = registry.GetEngine(realDb);
                     var col = engine.GetOrCreateCollection(physical);
 
                     var query = col.Query(blqlFilter);
@@ -210,7 +241,11 @@ internal static class RestApiBlqlExtensions
                         .Select(d => JsonNode.Parse(BsonJsonConverter.ToJson(d, indented: false)))
                         .ToList();
 
-                    return Results.Ok(new { count = docs.Count, skip, limit, documents = docs });
+                    var result = new { count = docs.Count, skip, limit, documents = docs };
+                    if (cache.Enabled && docs.Count <= cacheOpts.Value.MaxResultSetSize)
+                        cache.Set(cacheKey, result, realDb, physical);
+
+                    return Results.Ok(result);
                 }
                 catch (InvalidOperationException ex)
                 {
@@ -235,12 +270,15 @@ internal static class RestApiBlqlExtensions
         group.MapPost("/{dbId}/{collection}/query/count",
             async (HttpContext ctx,
                    EngineRegistry registry,
+                   QueryCacheService cache,
+                   TransactionManager txnManager,
                    string dbId,
                    string collection,
                    CancellationToken ct) =>
             {
                 var user = (BLiteUser)ctx.Items[nameof(BLiteUser)]!;
                 var physical = NamespaceResolver.Resolve(user, collection);
+                var realDb = RestApiExtensions.NullIfDefault(dbId);
 
                 BlqlFilter filter = BlqlFilter.Empty;
 
@@ -251,6 +289,14 @@ internal static class RestApiBlqlExtensions
                     body = await reader.ReadToEndAsync(ct);
                 }
                 catch (Exception ex) { return BLiteErrors.InvalidJson(ex.Message).ToResult(); }
+
+                var cacheKey = QueryCacheKeys.BlqlCount(realDb, physical, body ?? string.Empty);
+                if (cache.Enabled
+                    && !txnManager.HasActiveTransaction(realDb))
+                {
+                    if (cache.TryGet(cacheKey, out object? hit))
+                        return Results.Ok(hit);
+                }
 
                 if (!string.IsNullOrWhiteSpace(body))
                 {
@@ -277,10 +323,13 @@ internal static class RestApiBlqlExtensions
 
                 try
                 {
-                    var engine = registry.GetEngine(RestApiExtensions.NullIfDefault(dbId));
+                    var engine = registry.GetEngine(realDb);
                     var col = engine.GetOrCreateCollection(physical);
                     var count = col.Query(filter).Count();
-                    return Results.Ok(new { count });
+                    var result = new { count };
+                    if (cache.Enabled)
+                        cache.Set(cacheKey, result, realDb, physical);
+                    return Results.Ok(result);
                 }
                 catch (InvalidOperationException ex)
                 {

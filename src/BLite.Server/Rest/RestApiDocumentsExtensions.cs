@@ -7,6 +7,9 @@
 
 using BLite.Bson;
 using BLite.Server.Auth;
+using BLite.Server.Caching;
+using BLite.Server.Transactions;
+using Microsoft.Extensions.Options;
 using System.Collections.Concurrent;
 
 namespace BLite.Server.Rest;
@@ -38,6 +41,9 @@ internal static class RestApiDocumentsExtensions
         group.MapGet("/{dbId}/{collection}/documents",
             async (HttpContext ctx,
                    EngineRegistry registry,
+                   QueryCacheService cache,
+                   IOptions<QueryCacheOptions> cacheOpts,
+                   TransactionManager txnManager,
                    string dbId,
                    string collection,
                    int skip = 0,
@@ -48,10 +54,19 @@ internal static class RestApiDocumentsExtensions
 
                 var user = (BLiteUser)ctx.Items[nameof(BLiteUser)]!;
                 var physical = NamespaceResolver.Resolve(user, collection);
+                var realDb = RestApiExtensions.NullIfDefault(dbId);
+
+                var cacheKey = QueryCacheKeys.DocumentsList(realDb, physical, skip, limit);
+                if (cache.Enabled
+                    && !txnManager.HasActiveTransaction(realDb))
+                {
+                    if (cache.TryGet(cacheKey, out List<object>? cached))
+                        return Results.Ok(cached);
+                }
 
                 try
                 {
-                    var engine = registry.GetEngine(RestApiExtensions.NullIfDefault(dbId));
+                    var engine = registry.GetEngine(realDb);
                     var col = engine.GetOrCreateCollection(physical);
                     var docs = new List<object>();
                     int index = 0;
@@ -62,6 +77,9 @@ internal static class RestApiDocumentsExtensions
                         if (docs.Count >= limit) break;
                         docs.Add(BsonJsonConverter.ToJson(doc, indented: false));
                     }
+
+                    if (cache.Enabled && docs.Count <= cacheOpts.Value.MaxResultSetSize)
+                        cache.Set(cacheKey, docs, realDb, physical);
 
                     return Results.Ok(docs);
                 }
@@ -82,6 +100,7 @@ internal static class RestApiDocumentsExtensions
         group.MapPost("/{dbId}/{collection}/documents",
             async (HttpContext ctx,
                    EngineRegistry registry,
+                   QueryCacheService cache,
                    string dbId,
                    string collection,
                    CancellationToken ct) =>
@@ -107,12 +126,15 @@ internal static class RestApiDocumentsExtensions
 
                 try
                 {
-                    var engine = registry.GetEngine(RestApiExtensions.NullIfDefault(dbId));
+                    var realDb = RestApiExtensions.NullIfDefault(dbId);
+                    var engine = registry.GetEngine(realDb);
                     engine.RegisterKeys(RestApiExtensions.CollectJsonKeys(json));
                     var keyMap = (ConcurrentDictionary<string, ushort>)engine.GetKeyMap();
                     var revMap = (ConcurrentDictionary<ushort, string>)engine.GetKeyReverseMap();
                     var doc = BsonJsonConverter.FromJson(json, keyMap, revMap);
                     var id = await engine.InsertAsync(physical, doc, ct);
+                    if (cache.Enabled)
+                        cache.Invalidate(realDb, physical);
                     return Results.Created(
                         $"/api/v1/{dbId}/{collection}/documents/{id}",
                         new { id = id.ToString() });
@@ -174,6 +196,7 @@ internal static class RestApiDocumentsExtensions
         group.MapPut("/{dbId}/{collection}/documents/{id}",
             async (HttpContext ctx,
                    EngineRegistry registry,
+                   QueryCacheService cache,
                    string dbId,
                    string collection,
                    string id,
@@ -196,12 +219,15 @@ internal static class RestApiDocumentsExtensions
 
                 try
                 {
-                    var engine = registry.GetEngine(RestApiExtensions.NullIfDefault(dbId));
+                    var realDb = RestApiExtensions.NullIfDefault(dbId);
+                    var engine = registry.GetEngine(realDb);
                     engine.RegisterKeys(RestApiExtensions.CollectJsonKeys(json));
                     var keyMap = (ConcurrentDictionary<string, ushort>)engine.GetKeyMap();
                     var revMap = (ConcurrentDictionary<ushort, string>)engine.GetKeyReverseMap();
                     var doc = BsonJsonConverter.FromJson(json, keyMap, revMap);
                     var ok = await engine.UpdateAsync(physical, bsonId, doc, ct);
+                    if (ok && cache.Enabled)
+                        cache.Invalidate(realDb, physical);
                     return ok
                         ? Results.NoContent()
                         : Results.Problem(
@@ -229,6 +255,7 @@ internal static class RestApiDocumentsExtensions
         group.MapDelete("/{dbId}/{collection}/documents/{id}",
             async (HttpContext ctx,
                    EngineRegistry registry,
+                   QueryCacheService cache,
                    string dbId,
                    string collection,
                    string id,
@@ -240,8 +267,11 @@ internal static class RestApiDocumentsExtensions
 
                 try
                 {
-                    var engine = registry.GetEngine(RestApiExtensions.NullIfDefault(dbId));
+                    var realDb = RestApiExtensions.NullIfDefault(dbId);
+                    var engine = registry.GetEngine(realDb);
                     var ok = await engine.DeleteAsync(physical, bsonId, ct);
+                    if (ok && cache.Enabled)
+                        cache.Invalidate(realDb, physical);
                     return ok
                         ? Results.NoContent()
                         : Results.Problem(

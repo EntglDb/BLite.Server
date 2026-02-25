@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using BLite.Core;
 using BLite.Server.Auth;
 using Grpc.Core;
@@ -19,6 +20,7 @@ public sealed class TransactionSession
 
     private DateTime _lastActivity;
     private readonly int _timeoutSeconds;
+    private readonly ConcurrentBag<string> _dirtyCollections = [];
 
     public TransactionSession(
         string txnId, BLiteUser owner, int timeoutSeconds,
@@ -37,6 +39,14 @@ public sealed class TransactionSession
 
     /// <summary>Refreshes the idle-timeout timer.</summary>
     public void Touch() => _lastActivity = DateTime.UtcNow;
+
+    /// <summary>Marks a collection as written during this transaction for cache invalidation.</summary>
+    public void MarkDirty(string physicalCollection)
+        => _dirtyCollections.Add(physicalCollection);
+
+    /// <summary>Returns the set of collections written during this transaction.</summary>
+    public IReadOnlyCollection<string> DirtyCollections
+        => _dirtyCollections.Distinct().ToList();
 
     /// <summary>
     /// Validates that <paramref name="caller"/> owns this session; throws

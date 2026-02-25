@@ -16,10 +16,15 @@ public static class RestApiExtensions
 {
     // ── Entry point ────────────────────────────────────────────────────────────
 
-    public static void MapBliteRestApi(this WebApplication app)
+    public static void MapBliteRestApi(this WebApplication app, string? requiredHost = null)
     {
         var api = app.MapGroup("/api/v1")
                      .AddEndpointFilter<RestAuthFilter>();
+
+        // Bind REST endpoints to a specific host:port when the Rest and Studio
+        // endpoints are configured on separate ports.
+        if (requiredHost is not null)
+            api.RequireHost(requiredHost);
 
         api.MapDatabases();
         api.MapCollections();

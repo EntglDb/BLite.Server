@@ -10,6 +10,7 @@ using BLite.Server.Auth;
 using BLite.Server.Components;
 using BLite.Server.Rest;
 using BLite.Server.Services;
+using BLite.Server.Caching;
 using BLite.Server.Studio;
 using BLite.Server.Telemetry;
 using BLite.Server.Transactions;
@@ -146,6 +147,16 @@ builder.Services.AddGrpc(options =>
 
 builder.Services.AddGrpcReflection(); // enable grpcurl introspection in Development
 
+// Query cache (optional — disabled by default, enabled via QueryCache:Enabled)
+builder.Services.Configure<QueryCacheOptions>(
+    builder.Configuration.GetSection("QueryCache"));
+builder.Services.AddMemoryCache(opts =>
+{
+    var maxBytes = builder.Configuration.GetValue<long?>("QueryCache:MaxSizeBytes");
+    if (maxBytes > 0) opts.SizeLimit = maxBytes;
+});
+builder.Services.AddSingleton<QueryCacheService>();
+
 // ── Studio (Blazor Server on separate port) ──────────────────────────────────
 var studioEnabled = builder.Configuration.GetValue<bool?>("Studio:Enabled") ?? false;
 if (studioEnabled)
@@ -171,6 +182,27 @@ if (studioEnabled)
 
 // ── Build & configure pipeline ───────────────────────────────────────────────
 var app = builder.Build();
+
+// ── Host filters: bind REST and Studio to their dedicated Kestrel endpoints ──
+// Extract "*:<port>" patterns from the Kestrel endpoint URLs so RequireHost()
+// can pin each route group to the correct TCP port.
+static string? HostFilter(string? url)
+{
+    if (string.IsNullOrEmpty(url)) return null;
+    try
+    {
+        var uri = new Uri(url.Replace("*", "localhost").Replace("+", "localhost"));
+        return $"*:{uri.Port}";
+    }
+    catch { return null; }
+}
+
+var restHostFilter   = HostFilter(app.Configuration["Kestrel:Endpoints:Rest:Url"]);
+var studioHostFilter = HostFilter(app.Configuration["Kestrel:Endpoints:Studio:Url"]);
+// Apply filters only when the two endpoints have actually different ports.
+bool portsAreSeparate = restHostFilter is not null
+                     && studioHostFilter is not null
+                     && restHostFilter != studioHostFilter;
 
 // ── Bootstrap: load users from DB, ensure root exists ────────────────────────
 var userRepo = app.Services.GetRequiredService<UserRepository>();
@@ -216,16 +248,21 @@ app.MapGrpcService<AdminServiceImpl>();
 app.MapGrpcService<TransactionServiceImpl>();
 
 // REST API endpoints (/api/v1/...)
-app.MapBliteRestApi();
+app.MapBliteRestApi(portsAreSeparate ? restHostFilter : null);
 
-// OpenAPI spec + Scalar interactive UI (always available so operators can test)
-app.MapOpenApi();
-app.MapScalarApiReference(opts =>
+// OpenAPI spec + Scalar interactive UI — follow the REST port
+var openApi = app.MapOpenApi();
+var scalar  = app.MapScalarApiReference(opts =>
 {
     opts.Title = "BLite REST API";
     opts.OpenApiRoutePattern = "/openapi/v1.json";
     opts.DefaultHttpClient = new(ScalarTarget.Shell, ScalarClient.Curl);
 });
+if (portsAreSeparate)
+{
+    openApi.RequireHost(restHostFilter!);
+    scalar.RequireHost(restHostFilter!);
+}
 
 // Health-check endpoint (available on all ports)
 if (!studioEnabled)
@@ -248,7 +285,7 @@ if (studioEnabled)
 {
     // Sign-in: Blazor validates the key, issues a one-time token, and redirects here.
     // This is a real HTTP request, so HttpContext.SignInAsync works fine.
-    app.MapGet("/studio/sign-in", async (HttpContext ctx, string? t, SignInTokenCache cache) =>
+    var signIn = app.MapGet("/studio/sign-in", async (HttpContext ctx, string? t, SignInTokenCache cache) =>
     {
         if (string.IsNullOrWhiteSpace(t))
             return Results.Redirect("/login");
@@ -265,14 +302,23 @@ if (studioEnabled)
     });
 
     // Sign-out: clears the cookie and returns to the login page.
-    app.MapGet("/studio/logout", async (HttpContext ctx) =>
+    var signOut = app.MapGet("/studio/logout", async (HttpContext ctx) =>
     {
         await ctx.SignOutAsync("StudioCookie");
         return Results.Redirect("/login");
     });
 
-    app.MapRazorComponents<App>()
+    var blazor = app.MapRazorComponents<App>()
         .AddInteractiveServerRenderMode();
+
+    // When ports are separated, pin every Blazor/Studio route to the Studio port.
+    if (portsAreSeparate)
+    {
+        signIn.RequireHost(studioHostFilter!);
+        signOut.RequireHost(studioHostFilter!);
+        blazor.RequireHost(studioHostFilter!);
+    }
+
     app.Logger.LogInformation(
         "BLite Studio enabled — open the Kestrel 'Studio' endpoint in a browser.");
 }

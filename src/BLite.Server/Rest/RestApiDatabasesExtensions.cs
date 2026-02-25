@@ -7,6 +7,7 @@
 
 using System.IO.Compression;
 using BLite.Server.Auth;
+using BLite.Server.Caching;
 
 namespace BLite.Server.Rest;
 
@@ -69,13 +70,17 @@ internal static class RestApiDatabasesExtensions
         // DELETE /api/v1/databases/{dbId}?deleteFiles=false
         group.MapDelete("/databases/{dbId}",
             async (EngineRegistry registry,
+                   QueryCacheService cache,
                    string dbId,
                    bool deleteFiles,
                    CancellationToken ct) =>
             {
                 try
                 {
+                    var realId = RestApiExtensions.NullIfDefault(dbId);
                     await registry.DeprovisionAsync(dbId, deleteFiles, ct);
+                    if (cache.Enabled)
+                        cache.InvalidateDatabase(realId);
                     return Results.NoContent();
                 }
                 catch (InvalidOperationException ex)

@@ -7,10 +7,12 @@ using BLite.Core;
 using BLite.Proto;
 using BLite.Proto.V1;
 using BLite.Server.Auth;
+using BLite.Server.Caching;
 using BLite.Server.Execution;
 using BLite.Server.Transactions;
 using Google.Protobuf;
 using Grpc.Core;
+using Microsoft.Extensions.Options;
 
 namespace BLite.Server.Services;
 
@@ -25,17 +27,23 @@ public sealed class DynamicServiceImpl : DynamicService.DynamicServiceBase
     private readonly EngineRegistry              _registry;
     private readonly AuthorizationService        _authz;
     private readonly TransactionManager          _txnManager;
+    private readonly QueryCacheService           _cache;
+    private readonly IOptions<QueryCacheOptions> _cacheOpts;
     private readonly ILogger<DynamicServiceImpl> _logger;
 
     public DynamicServiceImpl(
         EngineRegistry      registry,
         AuthorizationService authz,
         TransactionManager  txnManager,
+        QueryCacheService cache,
+        IOptions<QueryCacheOptions> cacheOpts,
         ILogger<DynamicServiceImpl> logger)
     {
         _registry   = registry;
         _authz      = authz;
         _txnManager = txnManager;
+        _cache      = cache;
+        _cacheOpts  = cacheOpts;
         _logger     = logger;
     }
 
@@ -55,10 +63,13 @@ public sealed class DynamicServiceImpl : DynamicService.DynamicServiceBase
             {
                 var session = _txnManager.RequireSession(request.TransactionId, user);
                 id = await session.Engine.GetOrCreateCollection(col).InsertAsync(doc, context.CancellationToken);
+                session.MarkDirty(col);
             }
             else
             {
                 id = await engine.InsertAsync(col, doc, context.CancellationToken);
+                if (_cache.Enabled)
+                    _cache.Invalidate(user.DatabaseId, col);
             }
             return new InsertResponse { Id = BsonIdSerializer.ToProto(id) };
         }
@@ -115,10 +126,13 @@ public sealed class DynamicServiceImpl : DynamicService.DynamicServiceBase
             {
                 var session = _txnManager.RequireSession(request.TransactionId, user);
                 ok = await session.Engine.GetOrCreateCollection(col).UpdateAsync(id, doc, context.CancellationToken);
+                if (ok) session.MarkDirty(col);
             }
             else
             {
                 ok = await engine.UpdateAsync(col, id, doc, context.CancellationToken);
+                if (ok && _cache.Enabled)
+                    _cache.Invalidate(user.DatabaseId, col);
             }
             return new MutationResponse { Success = ok };
         }
@@ -145,10 +159,13 @@ public sealed class DynamicServiceImpl : DynamicService.DynamicServiceBase
             {
                 var session = _txnManager.RequireSession(request.TransactionId, user);
                 ok = await session.Engine.GetOrCreateCollection(col).DeleteAsync(id, context.CancellationToken);
+                if (ok) session.MarkDirty(col);
             }
             else
             {
                 ok = await engine.DeleteAsync(col, id, context.CancellationToken);
+                if (ok && _cache.Enabled)
+                    _cache.Invalidate(user.DatabaseId, col);
             }
             return new MutationResponse { Success = ok };
         }
@@ -185,15 +202,30 @@ public sealed class DynamicServiceImpl : DynamicService.DynamicServiceBase
         var engine = _registry.GetEngine(user.DatabaseId);
         var ct     = context.CancellationToken;
 
+        var cacheKey = QueryCacheKeys.GrpcQuery(user.DatabaseId, col,
+                                                request.QueryDescriptor.ToByteArray());
+
+        if (_cache.Enabled && _cache.TryGet(cacheKey, out List<byte[]>? cachedPayloads))
+        {
+            foreach (var payload in cachedPayloads!)
+                await responseStream.WriteAsync(
+                    new DocumentResponse { BsonPayload = ByteString.CopyFrom(payload), Found = true },
+                    ct);
+            return;
+        }
+
+        var payloads = new List<byte[]>();
         await foreach (var doc in QueryDescriptorExecutor.ExecuteAsync(engine, descriptor, ct))
         {
-            var response = new DocumentResponse
-            {
-                BsonPayload = ByteString.CopyFrom(BsonPayloadSerializer.Serialize(doc)),
-                Found       = true
-            };
-            await responseStream.WriteAsync(response, ct);
+            var payload = BsonPayloadSerializer.Serialize(doc);
+            payloads.Add(payload);
+            await responseStream.WriteAsync(
+                new DocumentResponse { BsonPayload = ByteString.CopyFrom(payload), Found = true },
+                ct);
         }
+
+        if (_cache.Enabled && payloads.Count <= _cacheOpts.Value.MaxResultSetSize)
+            _cache.Set(cacheKey, payloads, user.DatabaseId, col);
     }
 
     // -- InsertBulk ------------------------------------------------------------
@@ -215,10 +247,13 @@ public sealed class DynamicServiceImpl : DynamicService.DynamicServiceBase
             {
                 var session = _txnManager.RequireSession(request.TransactionId, user);
                 ids = await session.Engine.GetOrCreateCollection(col).InsertBulkAsync(docs, context.CancellationToken);
+                session.MarkDirty(col);
             }
             else
             {
                 ids = await engine.InsertBulkAsync(col, docs, context.CancellationToken);
+                if (_cache.Enabled)
+                    _cache.Invalidate(user.DatabaseId, col);
             }
             var response = new BulkInsertResponse();
             response.Ids.AddRange(ids.Select(BsonIdSerializer.ToProto));
@@ -254,10 +289,13 @@ public sealed class DynamicServiceImpl : DynamicService.DynamicServiceBase
             {
                 var session = _txnManager.RequireSession(request.TransactionId, user);
                 count = await session.Engine.GetOrCreateCollection(col).UpdateBulkAsync(pairs, context.CancellationToken);
+                if (count > 0) session.MarkDirty(col);
             }
             else
             {
                 count = await engine.UpdateBulkAsync(col, pairs, context.CancellationToken);
+                if (count > 0 && _cache.Enabled)
+                    _cache.Invalidate(user.DatabaseId, col);
             }
             return new BulkMutationResponse { AffectedCount = count };
         }
@@ -284,10 +322,13 @@ public sealed class DynamicServiceImpl : DynamicService.DynamicServiceBase
             {
                 var session = _txnManager.RequireSession(request.TransactionId, user);
                 count = await session.Engine.GetOrCreateCollection(col).DeleteBulkAsync(ids, context.CancellationToken);
+                if (count > 0) session.MarkDirty(col);
             }
             else
             {
                 count = await engine.DeleteBulkAsync(col, ids, context.CancellationToken);
+                if (count > 0 && _cache.Enabled)
+                    _cache.Invalidate(user.DatabaseId, col);
             }
             return new BulkMutationResponse { AffectedCount = count };
         }

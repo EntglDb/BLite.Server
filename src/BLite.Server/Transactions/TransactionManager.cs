@@ -1,6 +1,7 @@
 ﻿using System.Collections.Concurrent;
 using BLite.Core;
 using BLite.Server.Auth;
+using BLite.Server.Caching;
 using BLite.Server.Telemetry;
 using Grpc.Core;
 using Microsoft.Extensions.Options;
@@ -38,6 +39,7 @@ public sealed class TransactionManager : IAsyncDisposable
     private readonly EngineRegistry              _registry;
     private readonly int                         _timeoutSeconds;
     private readonly ILogger<TransactionManager> _logger;
+    private readonly QueryCacheService          _cache;
 
     // Per-database lock: canonical database-id → SemaphoreSlim(1,1)
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _locks
@@ -49,11 +51,13 @@ public sealed class TransactionManager : IAsyncDisposable
     public TransactionManager(
         EngineRegistry                   registry,
         IOptions<TransactionOptions>     opts,
-        ILogger<TransactionManager>      logger)
+        ILogger<TransactionManager>      logger,
+        QueryCacheService                cache)
     {
         _registry       = registry;
         _timeoutSeconds = opts.Value.TimeoutSeconds;
         _logger         = logger;
+        _cache          = cache;
     }
 
     // Returns (or lazily creates) the per-database semaphore.
@@ -110,6 +114,12 @@ public sealed class TransactionManager : IAsyncDisposable
         try
         {
             await session.Engine.CommitAsync(ct);
+
+            // Invalidate cache for every collection written in this transaction
+            if (_cache.Enabled)
+                foreach (var col in session.DirtyCollections)
+                    _cache.Invalidate(session.DatabaseId, col);
+
             _logger.LogInformation("Transaction {TxnId} committed by '{User}'.", txnId, caller.Username);
         }
         finally
@@ -153,6 +163,15 @@ public sealed class TransactionManager : IAsyncDisposable
         session.RequireOwner(caller);
         session.Touch();
         return session;
+    }
+
+    /// <summary>
+    /// Returns true if there is an active transaction on the given database.
+    /// </summary>
+    public bool HasActiveTransaction(string? dbId)
+    {
+        var key = CanonicalDbId(dbId);
+        return _sessions.Values.Any(s => s.DatabaseId == key);
     }
 
     /// <summary>

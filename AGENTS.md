@@ -32,7 +32,13 @@ BLite          — (sibling) client SDK, not modified here
 | Endpoint | URL | Protocol |
 |---|---|---|
 | gRPC | `https://*:2626` | HTTP/2 only |
-| Studio (Blazor + REST) | `https://*:2627` | HTTP/1.1 + HTTP/2 |
+| REST API | `https://*:2627` | HTTP/1.1 + HTTP/2 |
+| Studio (Blazor) | `https://*:2628` | HTTP/1.1 + HTTP/2 |
+
+REST and Studio run on dedicated ports when **both** `Kestrel:Endpoints:Rest` and
+`Kestrel:Endpoints:Studio` are configured with different URLs. If only `Studio` is
+configured (legacy single-port mode), all non-gRPC traffic is served on that one port
+without any `RequireHost` restriction — backward-compatible with older deployments.
 
 The Studio is enabled via `"Studio": { "Enabled": true }`. It is **off by default**
 in production images.

@@ -6,6 +6,7 @@
 // Errors are modelled with ErrorOr and mapped to RFC-9457 ProblemDetails.
 
 using BLite.Server.Auth;
+using BLite.Server.Caching;
 
 namespace BLite.Server.Rest;
 
@@ -108,16 +109,20 @@ internal static class RestApiCollectionsExtensions
         group.MapDelete("/{dbId}/collections/{collection}",
             (HttpContext ctx,
              EngineRegistry registry,
+             QueryCacheService cache,
              string dbId,
              string collection) =>
             {
                 var user = (BLiteUser)ctx.Items[nameof(BLiteUser)]!;
                 var physical = NamespaceResolver.Resolve(user, collection);
+                var realDb = RestApiExtensions.NullIfDefault(dbId);
 
                 try
                 {
-                    var engine = registry.GetEngine(RestApiExtensions.NullIfDefault(dbId));
+                    var engine = registry.GetEngine(realDb);
                     var dropped = engine.DropCollection(physical);
+                    if (dropped && cache.Enabled)
+                        cache.Invalidate(realDb, physical);
                     return dropped
                         ? Results.NoContent()
                         : Results.Problem(
