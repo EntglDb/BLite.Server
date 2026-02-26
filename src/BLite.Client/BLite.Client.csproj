@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RootNamespace>BLite.Client</RootNamespace>
+    <AssemblyName>BLite.Client</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>    <InternalsVisibleTo Include="BLite.Client.IntegrationTests" />
+  </ItemGroup>
+
+  <ItemGroup>    <!-- BLite engine — direct project reference (local workspace) -->
+    <ProjectReference Include="..\..\..\BLite\src\BLite\BLite.csproj" />
+    <!-- gRPC proto definitions + QueryDescriptor -->
+    <ProjectReference Include="..\..\..\BLite.Server\src\BLite.Proto\BLite.Proto.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- gRPC client channel -->
+    <PackageReference Include="Grpc.Net.Client"  Version="2.68.*" />
+    <!-- QueryDescriptor wire serialization (same options as server) -->
+    <PackageReference Include="MessagePack"      Version="3.1.*" />
+  </ItemGroup>
+
+</Project>

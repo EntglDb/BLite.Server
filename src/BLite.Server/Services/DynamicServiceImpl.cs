@@ -4,6 +4,8 @@
 using System.Collections.Concurrent;
 using BLite.Bson;
 using BLite.Core;
+using BLite.Core.Indexing;
+using BLite.Core.Storage;
 using BLite.Proto;
 using BLite.Proto.V1;
 using BLite.Server.Auth;
@@ -337,6 +339,333 @@ public sealed class DynamicServiceImpl : DynamicService.DynamicServiceBase
         {
             _logger.LogError(ex, "DeleteBulk failed on collection {Col}", col);
             return new BulkMutationResponse { Error = ex.Message };
+        }
+    }
+
+    // -- VectorSearch ----------------------------------------------------------
+
+    public override async Task VectorSearch(
+        VectorSearchRequest request,
+        IServerStreamWriter<DocumentResponse> responseStream,
+        ServerCallContext context)
+    {
+        var (col, user) = AuthorizeWithUser(context, request.Collection, BLiteOperation.Query);
+        var engine = _registry.GetEngine(user.DatabaseId);
+        try
+        {
+            var collection = engine.GetOrCreateCollection(col);
+            var indexName = ResolveVectorIndexName(engine, col, request.IndexName);
+            var k = request.K > 0 ? request.K : 10;
+            var efSearch = request.EfSearch > 0 ? request.EfSearch : 100;
+            var queryVector = request.QueryVector.ToArray();
+
+            foreach (var doc in collection.VectorSearch(indexName, queryVector, k, efSearch))
+            {
+                context.CancellationToken.ThrowIfCancellationRequested();
+                var payload = BsonPayloadSerializer.Serialize(doc);
+                await responseStream.WriteAsync(
+                    new DocumentResponse { BsonPayload = ByteString.CopyFrom(payload), Found = true },
+                    context.CancellationToken);
+            }
+        }
+        catch (RpcException) { throw; }
+        catch (ArgumentException ex)
+        {
+            throw new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "VectorSearch failed on collection {Col}", col);
+            throw new RpcException(new Status(StatusCode.Internal, ex.Message));
+        }
+    }
+
+    private static string ResolveVectorIndexName(BLiteEngine engine, string collection, string requested)
+    {
+        if (!string.IsNullOrEmpty(requested))
+            return requested;
+
+        var indexes = engine.GetIndexDescriptors(collection);
+        var vec = indexes.FirstOrDefault(d => d.Type == BLite.Core.Indexing.IndexType.Vector);
+        if (vec == null)
+            throw new RpcException(new Status(StatusCode.InvalidArgument,
+                $"Collection '{collection}' has no vector index."));
+
+        return vec.Name;
+    }
+
+    // -- Index management -----------------------------------------------------
+
+    public override async Task<MutationResponse> CreateIndex(
+        CreateIndexRequest request, ServerCallContext context)
+    {
+        var (col, _) = AuthorizeWithUser(context, request.Collection, BLiteOperation.Admin);
+        var engine = _registry.GetEngine(BLiteServiceBase.GetCurrentUser(context).DatabaseId);
+        try
+        {
+            var collection = engine.GetOrCreateCollection(col);
+            var name = string.IsNullOrWhiteSpace(request.Name) ? null : request.Name.Trim();
+
+            if (request.IsVector)
+            {
+                var metric = request.Metric.Trim().ToLowerInvariant() switch
+                {
+                    "l2"         => BLite.Core.Indexing.VectorMetric.L2,
+                    "dotproduct" => BLite.Core.Indexing.VectorMetric.DotProduct,
+                    _            => BLite.Core.Indexing.VectorMetric.Cosine
+                };
+                collection.CreateVectorIndex(request.Field, request.Dimensions, metric, name);
+            }
+            else if (request.IsSpatial)
+            {
+                collection.CreateSpatialIndex(request.Field, name);
+            }
+            else
+            {
+                collection.CreateIndex(request.Field, name, request.Unique);
+            }
+
+            await engine.CommitAsync(context.CancellationToken);
+            return new MutationResponse { Success = true };
+        }
+        catch (RpcException) { throw; }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "CreateIndex failed on collection {Col}", col);
+            return new MutationResponse { Success = false, Error = ex.Message };
+        }
+    }
+
+    public override async Task<MutationResponse> DropIndex(
+        DropIndexRequest request, ServerCallContext context)
+    {
+        var (col, _) = AuthorizeWithUser(context, request.Collection, BLiteOperation.Admin);
+        var engine = _registry.GetEngine(BLiteServiceBase.GetCurrentUser(context).DatabaseId);
+        try
+        {
+            var collection = engine.GetOrCreateCollection(col);
+            var ok = collection.DropIndex(request.Name);
+            if (ok) await engine.CommitAsync(context.CancellationToken);
+            return new MutationResponse { Success = ok };
+        }
+        catch (RpcException) { throw; }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "DropIndex failed on collection {Col}", col);
+            return new MutationResponse { Success = false, Error = ex.Message };
+        }
+    }
+
+    public override Task<ListIndexesResponse> ListIndexes(
+        CollectionRequest request, ServerCallContext context)
+    {
+        var (col, user) = AuthorizeWithUser(context, request.Collection, BLiteOperation.Query);
+        var engine = _registry.GetEngine(user.DatabaseId);
+        try
+        {
+            var descriptors = engine.GetIndexDescriptors(col);
+            var response = new ListIndexesResponse();
+            response.Indexes.AddRange(descriptors.Select(d => new IndexInfo
+            {
+                Name       = d.Name,
+                Field      = d.FieldPath,
+                Type       = d.Type.ToString(),
+                Dimensions = d.Dimensions,
+                Metric     = d.Metric.ToString()
+            }));
+            return Task.FromResult(response);
+        }
+        catch (RpcException) { throw; }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "ListIndexes failed on collection {Col}", col);
+            return Task.FromResult(new ListIndexesResponse { Error = ex.Message });
+        }
+    }
+
+    // -- VectorSource ---------------------------------------------------------
+
+    public override Task<MutationResponse> SetVectorSource(
+        SetVectorSourceRequest request, ServerCallContext context)
+    {
+        var (col, _) = AuthorizeWithUser(context, request.Collection, BLiteOperation.Admin);
+        var engine = _registry.GetEngine(BLiteServiceBase.GetCurrentUser(context).DatabaseId);
+        try
+        {
+            VectorSourceConfig? config = null;
+            if (request.Fields.Count > 0)
+            {
+                config = new VectorSourceConfig
+                {
+                    Separator = string.IsNullOrEmpty(request.Separator) ? " " : request.Separator
+                };
+                foreach (var f in request.Fields)
+                {
+                    config.Fields.Add(new VectorSourceField
+                    {
+                        Path   = f.Path,
+                        Prefix = string.IsNullOrEmpty(f.Prefix) ? null : f.Prefix,
+                        Suffix = string.IsNullOrEmpty(f.Suffix) ? null : f.Suffix
+                    });
+                }
+            }
+            engine.SetVectorSource(col, config);
+            return Task.FromResult(new MutationResponse { Success = true });
+        }
+        catch (RpcException) { throw; }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "SetVectorSource failed on collection {Col}", col);
+            return Task.FromResult(new MutationResponse { Success = false, Error = ex.Message });
+        }
+    }
+
+    public override Task<GetVectorSourceResponse> GetVectorSource(
+        CollectionRequest request, ServerCallContext context)
+    {
+        var (col, user) = AuthorizeWithUser(context, request.Collection, BLiteOperation.Query);
+        var engine = _registry.GetEngine(user.DatabaseId);
+        try
+        {
+            var config = engine.GetVectorSource(col);
+            if (config == null)
+                return Task.FromResult(new GetVectorSourceResponse { Configured = false });
+
+            var response = new GetVectorSourceResponse
+            {
+                Configured = true,
+                Separator  = config.Separator
+            };
+            response.Fields.AddRange(config.Fields.Select(f => new VectorFieldProto
+            {
+                Path   = f.Path,
+                Prefix = f.Prefix ?? string.Empty,
+                Suffix = f.Suffix ?? string.Empty
+            }));
+            return Task.FromResult(response);
+        }
+        catch (RpcException) { throw; }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "GetVectorSource failed on collection {Col}", col);
+            return Task.FromResult(new GetVectorSourceResponse { Error = ex.Message });
+        }
+    }
+
+    // -- Schema ---------------------------------------------------------------
+
+    public override Task<CollectionSchemaResponse> GetSchema(
+        CollectionRequest request, ServerCallContext context)
+    {
+        var (col, user) = AuthorizeWithUser(context, request.Collection, BLiteOperation.Query);
+        var engine = _registry.GetEngine(user.DatabaseId);
+        try
+        {
+            var schemas = engine.GetSchemas(col);
+            if (schemas.Count == 0)
+                return Task.FromResult(new CollectionSchemaResponse { HasSchema = false });
+
+            var latest = schemas[^1];
+            var response = new CollectionSchemaResponse
+            {
+                HasSchema = true,
+                Title = latest.Title ?? string.Empty,
+                Version = latest.Version ?? 0,
+                VersionCount = schemas.Count
+            };
+            response.Fields.AddRange(latest.Fields.Select(f => new SchemaFieldProto
+            {
+                Name = f.Name,
+                Type = (int)f.Type,
+                Nullable = f.IsNullable
+            }));
+            return Task.FromResult(response);
+        }
+        catch (RpcException) { throw; }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "GetSchema failed on collection {Col}", col);
+            return Task.FromResult(new CollectionSchemaResponse { Error = ex.Message });
+        }
+    }
+
+    public override async Task<MutationResponse> SetSchema(
+        SetSchemaRequest request, ServerCallContext context)
+    {
+        var (col, _) = AuthorizeWithUser(context, request.Collection, BLiteOperation.Admin);
+        var engine = _registry.GetEngine(BLiteServiceBase.GetCurrentUser(context).DatabaseId);
+        try
+        {
+            var schema = new BLite.Bson.BsonSchema
+            {
+                Title = string.IsNullOrEmpty(request.Title) ? null : request.Title
+            };
+            foreach (var f in request.Fields)
+            {
+                if (!string.IsNullOrWhiteSpace(f.Name))
+                    schema.Fields.Add(new BLite.Bson.BsonField
+                    {
+                        Name = f.Name.Trim(),
+                        Type = (BLite.Bson.BsonType)f.Type,
+                        IsNullable = f.Nullable
+                    });
+            }
+            engine.SetSchema(col, schema);
+            await engine.CommitAsync(context.CancellationToken);
+            return new MutationResponse { Success = true };
+        }
+        catch (RpcException) { throw; }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "SetSchema failed on collection {Col}", col);
+            return new MutationResponse { Success = false, Error = ex.Message };
+        }
+    }
+
+    // -- TimeSeries -----------------------------------------------------------
+
+    public override Task<MutationResponse> ConfigureTimeSeries(
+        ConfigureTimeSeriesRequest request, ServerCallContext context)
+    {
+        var (col, _) = AuthorizeWithUser(context, request.Collection, BLiteOperation.Admin);
+        var engine = _registry.GetEngine(BLiteServiceBase.GetCurrentUser(context).DatabaseId);
+        try
+        {
+            if (string.IsNullOrWhiteSpace(request.TtlFieldName))
+                return Task.FromResult(new MutationResponse { Success = false, Error = "ttl_field_name is required." });
+            if (request.RetentionMs <= 0)
+                return Task.FromResult(new MutationResponse { Success = false, Error = "retention_ms must be positive." });
+            engine.SetTimeSeries(col, request.TtlFieldName, TimeSpan.FromMilliseconds(request.RetentionMs));
+            return Task.FromResult(new MutationResponse { Success = true });
+        }
+        catch (RpcException) { throw; }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "ConfigureTimeSeries failed on collection {Col}", col);
+            return Task.FromResult(new MutationResponse { Success = false, Error = ex.Message });
+        }
+    }
+
+    public override Task<TimeSeriesInfoResponse> GetTimeSeriesInfo(
+        CollectionRequest request, ServerCallContext context)
+    {
+        var (col, user) = AuthorizeWithUser(context, request.Collection, BLiteOperation.Query);
+        var engine = _registry.GetEngine(user.DatabaseId);
+        try
+        {
+            var (isTs, retentionMs, ttlField) = engine.GetTimeSeriesConfig(col);
+            return Task.FromResult(new TimeSeriesInfoResponse
+            {
+                IsTimeSeries = isTs,
+                TtlFieldName = ttlField ?? string.Empty,
+                RetentionMs = retentionMs
+            });
+        }
+        catch (RpcException) { throw; }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "GetTimeSeriesInfo failed on collection {Col}", col);
+            return Task.FromResult(new TimeSeriesInfoResponse { Error = ex.Message });
         }
     }
 

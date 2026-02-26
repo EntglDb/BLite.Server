@@ -6,6 +6,8 @@
 // Errors are modelled with ErrorOr and mapped to RFC-9457 ProblemDetails.
 
 using BLite.Bson;
+using BLite.Core;
+using BLite.Core.Indexing;
 using BLite.Server.Auth;
 using BLite.Server.Caching;
 using BLite.Server.Transactions;
@@ -290,5 +292,80 @@ internal static class RestApiDocumentsExtensions
             .AddEndpointFilter(new PermissionFilter(BLiteOperation.Delete, checkDb: true))
             .WithSummary("Delete a document")
             .WithDescription("Permanently deletes the document with the given id. Returns 404 if the document does not exist.");
+
+        // POST /api/v1/{dbId}/{collection}/vector-search
+        //   Body: { "vector": [...], "k": 10, "indexName": "myIdx", "efSearch": 100 }
+        group.MapPost("/{dbId}/{collection}/vector-search",
+            async (HttpContext ctx,
+                   EngineRegistry registry,
+                   string dbId,
+                   string collection,
+                   VectorSearchBody body,
+                   CancellationToken ct) =>
+            {
+                var user = (BLiteUser)ctx.Items[nameof(BLiteUser)]!;
+                var physical = NamespaceResolver.Resolve(user, collection);
+                var realDb = RestApiExtensions.NullIfDefault(dbId);
+
+                if (body.Vector is not { Length: > 0 })
+                    return Results.ValidationProblem(new Dictionary<string, string[]>
+                    {
+                        ["vector"] = ["vector is required and must be non-empty."]
+                    });
+
+                try
+                {
+                    var engine = registry.GetEngine(realDb);
+                    var col = engine.GetOrCreateCollection(physical);
+
+                    // Resolve index name
+                    var indexName = body.IndexName;
+                    if (string.IsNullOrEmpty(indexName))
+                    {
+                        var indexes = engine.GetIndexDescriptors(physical);
+                        var vec = indexes.FirstOrDefault(d => d.Type == IndexType.Vector);
+                        if (vec == null)
+                            return Results.Problem(
+                                title: "No vector index",
+                                detail: $"Collection '{collection}' has no vector index.",
+                                statusCode: StatusCodes.Status422UnprocessableEntity);
+                        indexName = vec.Name;
+                    }
+
+                    var k = body.K > 0 ? body.K : 10;
+                    var efSearch = body.EfSearch > 0 ? body.EfSearch : 100;
+
+                    var results = col.VectorSearch(indexName, body.Vector, k, efSearch)
+                        .Select(doc => BsonJsonConverter.ToJson(doc, indented: false))
+                        .ToList();
+
+                    return Results.Ok(new { count = results.Count, documents = results });
+                }
+                catch (ArgumentException ex)
+                {
+                    return Results.Problem(
+                        title: "Invalid argument",
+                        detail: ex.Message,
+                        statusCode: StatusCodes.Status422UnprocessableEntity);
+                }
+                catch (InvalidOperationException ex)
+                {
+                    return Results.Problem(
+                        title: "Not Found",
+                        detail: ex.Message,
+                        statusCode: StatusCodes.Status404NotFound);
+                }
+            })
+            .AddEndpointFilter(new PermissionFilter(BLiteOperation.Query, checkDb: true))
+            .WithSummary("Vector similarity search")
+            .WithDescription("Returns the k nearest documents to the given query vector using the HNSW index.");
     }
+}
+
+internal sealed class VectorSearchBody
+{
+    public float[] Vector    { get; set; } = [];
+    public int     K         { get; set; } = 10;
+    public string? IndexName { get; set; }
+    public int     EfSearch  { get; set; } = 100;
 }

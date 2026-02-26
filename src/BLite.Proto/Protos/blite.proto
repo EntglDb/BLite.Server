@@ -22,6 +22,9 @@ service DynamicService {
   // query_descriptor carries the QueryDescriptor (MessagePack-encoded).
   rpc Query       (QueryRequest)        returns (stream DocumentResponse);
 
+  // Vector similarity search — returns the k nearest neighbours.
+  rpc VectorSearch (VectorSearchRequest) returns (stream DocumentResponse);
+
   // Bulk operations (single WAL transaction per call)
   rpc InsertBulk  (BulkInsertRequest)   returns (BulkInsertResponse);
   rpc UpdateBulk  (BulkUpdateRequest)   returns (BulkMutationResponse);
@@ -30,6 +33,23 @@ service DynamicService {
   // Collection management
   rpc ListCollections  (Empty)                    returns (CollectionListResponse);
   rpc DropCollection   (DropCollectionRequest)    returns (MutationResponse);
+
+  // Index management
+  rpc CreateIndex     (CreateIndexRequest)    returns (MutationResponse);
+  rpc DropIndex       (DropIndexRequest)      returns (MutationResponse);
+  rpc ListIndexes     (CollectionRequest)     returns (ListIndexesResponse);
+
+  // VectorSource (embedding source field configuration)
+  rpc SetVectorSource (SetVectorSourceRequest)  returns (MutationResponse);
+  rpc GetVectorSource (CollectionRequest)        returns (GetVectorSourceResponse);
+
+  // TimeSeries configuration (irreversible — call once per collection)
+  rpc ConfigureTimeSeries (ConfigureTimeSeriesRequest) returns (MutationResponse);
+  rpc GetTimeSeriesInfo   (CollectionRequest)          returns (TimeSeriesInfoResponse);
+
+  // Schema management
+  rpc GetSchema (CollectionRequest)  returns (CollectionSchemaResponse);
+  rpc SetSchema (SetSchemaRequest)   returns (MutationResponse);
 }
 
 // ─── DocumentService ─────────────────────────────────────────────────────────
@@ -107,6 +127,109 @@ message DocumentResponse {
 // query_descriptor is a MessagePack-encoded QueryDescriptor.
 message QueryRequest {
   bytes query_descriptor = 1;
+}
+
+message VectorSearchRequest {
+  string         collection   = 1;
+  string         index_name   = 2;   // empty = use first vector index
+  repeated float query_vector = 3;
+  int32          k            = 4;   // number of nearest neighbours (default 10)
+  int32          ef_search    = 5;   // HNSW efSearch (default 100, higher = more recall)
+}
+
+// ── Index management messages ─────────────────────────────────────────────────
+
+message CollectionRequest {
+  string collection = 1;
+}
+
+message CreateIndexRequest {
+  string collection = 1;
+  string field      = 2;
+  string name       = 3;        // optional — auto-generated if empty
+  bool   unique     = 4;        // BTree only: enforce uniqueness
+  bool   is_vector  = 5;        // true = create HNSW vector index
+  int32  dimensions = 6;        // vector only
+  string metric     = 7;        // vector only: "Cosine" | "L2" | "DotProduct"
+  bool   is_spatial = 8;        // true = create R-Tree spatial index
+}
+
+message DropIndexRequest {
+  string collection = 1;
+  string name       = 2;
+}
+
+message ListIndexesResponse {
+  repeated IndexInfo indexes = 1;
+  string             error   = 2;
+}
+
+message IndexInfo {
+  string name       = 1;
+  string field      = 2;
+  string type       = 3;        // "BTree" | "Vector" | "Spatial"
+  bool   unique     = 4;
+  int32  dimensions = 5;        // vector only
+  string metric     = 6;        // vector only
+}
+
+// ── VectorSource messages ─────────────────────────────────────────────────────
+
+message SetVectorSourceRequest {
+  string                   collection = 1;
+  string                   separator  = 2;
+  repeated VectorFieldProto fields    = 3;   // empty list = clear the configuration
+}
+
+message VectorFieldProto {
+  string path   = 1;
+  string prefix = 2;   // optional
+  string suffix = 3;   // optional
+}
+
+message GetVectorSourceResponse {
+  bool                     configured = 1;
+  string                   separator  = 2;
+  repeated VectorFieldProto fields    = 3;
+  string                   error      = 4;
+}
+
+// ── TimeSeries messages ──────────────────────────────────────────────────────
+
+message ConfigureTimeSeriesRequest {
+  string collection     = 1;
+  string ttl_field_name = 2;  // field holding the timestamp used for ordering and pruning
+  int64  retention_ms   = 3;  // how long to keep documents (milliseconds); 0 = keep forever
+}
+
+message TimeSeriesInfoResponse {
+  bool   is_time_series = 1;
+  string ttl_field_name = 2;
+  int64  retention_ms   = 3;
+  string error          = 4;
+}
+
+// ── Schema messages ──────────────────────────────────────────────────────
+
+message SchemaFieldProto {
+  string name     = 1;
+  int32  type     = 2;   // BsonType byte value (e.g. 0x02 = String, 0x10 = Int32)
+  bool   nullable = 3;
+}
+
+message SetSchemaRequest {
+  string                   collection = 1;
+  string                   title      = 2;   // optional
+  repeated SchemaFieldProto fields    = 3;
+}
+
+message CollectionSchemaResponse {
+  bool                     has_schema     = 1;
+  string                   title          = 2;
+  int32                    version        = 3;
+  int32                    version_count  = 4;
+  repeated SchemaFieldProto fields        = 5;
+  string                   error          = 6;
 }
 
 message BulkInsertRequest {

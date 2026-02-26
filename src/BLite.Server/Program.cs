@@ -63,6 +63,16 @@ builder.Services.AddSingleton<AuthorizationService>();
 // Embedding service
 builder.Services.AddSingleton<EmbeddingService>();
 
+// Embedding worker
+builder.Services.Configure<EmbeddingWorkerOptions>(
+    builder.Configuration.GetSection(EmbeddingWorkerOptions.Section));
+builder.Services.AddSingleton<IEmbeddingQueue, EmbeddingQueue>();
+// Register as singleton by concrete type so it can be injected directly,
+// then resolve that same instance as the IHostedService.
+builder.Services.AddSingleton<EmbeddingQueuePopulator>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<EmbeddingQueuePopulator>());
+builder.Services.AddHostedService<EmbeddingWorker>();
+
 // REST API
 builder.Services.AddScoped<RestAuthFilter>();
 

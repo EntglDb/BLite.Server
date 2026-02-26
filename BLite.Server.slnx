@@ -2,9 +2,18 @@
   <Folder Name="/Elementi di soluzione/">
     <File Path="AGENTS.md" />
   </Folder>
-  <Project Path="../BLite/src/BLite.Bson/BLite.Bson.csproj" />
-  <Project Path="../BLite/src/BLite.Core/BLite.Core.csproj" />
-  <Project Path="../BLite/src/BLite/BLite.csproj" />
-  <Project Path="src/BLite.Proto/BLite.Proto.csproj" />
-  <Project Path="src/BLite.Server/BLite.Server.csproj" />
+  <Folder Name="/externals/">
+    <File Path="../BLite/tools/BLite.Studio/BLite.Studio.csproj" />
+    <Project Path="../BLite/src/BLite.Bson/BLite.Bson.csproj" />
+    <Project Path="../BLite/src/BLite.Core/BLite.Core.csproj" />
+    <Project Path="../BLite/src/BLite/BLite.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/BLite.Client/BLite.Client.csproj" />
+    <Project Path="src/BLite.Proto/BLite.Proto.csproj" />
+    <Project Path="src/BLite.Server/BLite.Server.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/BLite.Client.IntegrationTests/BLite.Client.IntegrationTests.csproj" />
+  </Folder>
 </Solution>

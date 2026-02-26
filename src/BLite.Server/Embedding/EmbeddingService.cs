@@ -21,17 +21,51 @@ public sealed class EmbeddingService : IDisposable
 {
     private readonly ReaderWriterLockSlim _rwLock = new();
     private readonly int _maxTokens;
+    private readonly ILogger<EmbeddingService> _logger;
 
     private InferenceSession? _session;
     private BertTokenizer? _tokenizer;
     private EmbeddingModelInfo _info;
 
-    public EmbeddingService(IConfiguration config)
+    /// <summary>True when a model has been successfully loaded and <see cref="Embed"/> can be called.</summary>
+    public bool IsLoaded
     {
+        get
+        {
+            _rwLock.EnterReadLock();
+            try { return _session != null; }
+            finally { _rwLock.ExitReadLock(); }
+        }
+    }
+
+    public EmbeddingService(IConfiguration config, ILogger<EmbeddingService> logger)
+    {
+        _logger = logger;
         var dir = config.GetValue<string>("Embedding:ModelDirectory") ?? "Embedding/MiniLM-L6-v2";
         _maxTokens = config.GetValue<int?>("Embedding:MaxTokens") ?? 512;
         _info = new EmbeddingModelInfo(dir, Path.GetFileName(dir), 0);
-        Load(dir);
+
+        // Model loading is optional at startup — the service starts in 'no model' mode
+        // if the directory or files are absent.  Embed() will throw until a model is loaded.
+        if (Directory.Exists(dir))
+        {
+            try
+            {
+                Load(dir);
+            }
+            catch (FileNotFoundException ex)
+            {
+                _logger.LogWarning("Embedding model not loaded: {Message}. " +
+                    "Configure Embedding:ModelDirectory or call LoadFromDirectory() at runtime.",
+                    ex.Message);
+            }
+        }
+        else
+        {
+            _logger.LogInformation(
+                "Embedding model directory '{Dir}' not found — embedding disabled until a model is loaded.",
+                dir);
+        }
     }
 
     public EmbeddingModelInfo Info

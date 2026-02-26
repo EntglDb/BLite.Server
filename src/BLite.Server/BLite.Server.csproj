@@ -11,6 +11,18 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Remove="data\**" />
+    <Content Remove="data\**" />
+    <EmbeddedResource Remove="data\**" />
+    <None Remove="data\**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Remove="blite.db" />
+    <None Remove="blite.wal" />
+  </ItemGroup>
+
+  <ItemGroup>
     <InternalsVisibleTo Include="BLite.Client.IntegrationTests" />
   </ItemGroup>
 
@@ -40,10 +52,6 @@
     <PackageReference Include="OpenTelemetry.Exporter.Console" Version="1.15.0" />
     <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.15.0" />
     <PackageReference Include="Scalar.AspNetCore" Version="2.*" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <Folder Include="data\tenants\" />
   </ItemGroup>
 
 </Project>

@@ -31,11 +31,13 @@ public sealed class StudioService
     private readonly ApiKeyValidator     _validator;
     private readonly AuthorizationService _authz;
     private readonly EmbeddingService    _embedding;
+    private readonly EmbeddingQueuePopulator _populator;
     private readonly string _sourceUrl;
 
     public StudioService(EngineRegistry registry, UserRepository users,
         SetupService setup, ApiKeyValidator validator,
-        AuthorizationService authz, EmbeddingService embedding, IConfiguration config)
+        AuthorizationService authz, EmbeddingService embedding,
+        EmbeddingQueuePopulator populator, IConfiguration config)
     {
         _registry  = registry;
         _users     = users;
@@ -43,6 +45,7 @@ public sealed class StudioService
         _validator = validator;
         _authz     = authz;
         _embedding = embedding;
+        _populator = populator;
         _sourceUrl = config.GetValue<string>("License:SourceUrl")
                      ?? "https://github.com/blitedb/BLite.Server";
     }
@@ -378,6 +381,7 @@ public sealed class StudioService
         var col    = engine.GetOrCreateCollection(collection);
         col.CreateVectorIndex(field, dimensions, metric, string.IsNullOrWhiteSpace(name) ? null : name.Trim());
         await engine.CommitAsync(ct);
+        await _populator.RefreshSubscriptionAsync(databaseId, collection, ct);
     }
 
     /// <summary>Creates a Spatial (R-Tree) index on the specified field and commits.</summary>
@@ -400,7 +404,11 @@ public sealed class StudioService
         var engine = _registry.GetEngine(databaseId);
         var col    = engine.GetOrCreateCollection(collection);
         var ok     = col.DropIndex(indexName);
-        if (ok) await engine.CommitAsync(ct);
+        if (ok)
+        {
+            await engine.CommitAsync(ct);
+            await _populator.RefreshSubscriptionAsync(databaseId, collection, ct);
+        }
         return ok;
     }
 
@@ -548,10 +556,12 @@ public sealed class StudioService
     /// Sets or updates the VectorSource configuration for a collection.
     /// Pass null to clear the configuration.
     /// </summary>
-    public void SetVectorSource(string? databaseId, string collection, VectorSourceConfig? config)
+    public async Task SetVectorSourceAsync(string? databaseId, string collection,
+        VectorSourceConfig? config, CancellationToken ct = default)
     {
         var engine = _registry.GetEngine(databaseId);
         engine.SetVectorSource(collection, config);
+        await _populator.RefreshSubscriptionAsync(databaseId, collection, ct);
     }
 
     /// <summary>
@@ -575,6 +585,58 @@ public sealed class StudioService
         if (doc == null) return string.Empty;
         var config = engine.GetVectorSource(collection);
         return config == null ? string.Empty : TextNormalizer.BuildEmbeddingText(doc, config);
+    }
+
+    // ── Schema ────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Returns the latest schema version for a collection.
+    /// <see cref="CollectionSchemaInfo.HasSchema"/> is false when no schema has been defined yet.
+    /// </summary>
+    public CollectionSchemaInfo GetSchema(string? databaseId, string collection)
+    {
+        var engine = _registry.GetEngine(databaseId);
+        var schemas = engine.GetSchemas(collection);
+        if (schemas.Count == 0)
+            return new CollectionSchemaInfo(false, null, null, 0, []);
+        var latest = schemas[^1];
+        var fields = latest.Fields
+            .Select(f => new SchemaFieldInfo(f.Name, f.Type, f.IsNullable))
+            .ToList();
+        return new CollectionSchemaInfo(true, latest.Title, latest.Version, schemas.Count, fields);
+    }
+
+    /// <summary>Appends a new schema version to a collection and commits.</summary>
+    public async Task SetSchemaAsync(string? databaseId, string collection,
+        string? title, IReadOnlyList<SchemaFieldInfo> fields, CancellationToken ct = default)
+    {
+        var engine = _registry.GetEngine(databaseId);
+        var schema = new BsonSchema { Title = string.IsNullOrWhiteSpace(title) ? null : title.Trim() };
+        foreach (var f in fields)
+            schema.Fields.Add(new BsonField { Name = f.Name, Type = f.Type, IsNullable = f.IsNullable });
+        engine.SetSchema(collection, schema);
+        await engine.CommitAsync(ct);
+    }
+
+    // ── TimeSeries ────────────────────────────────────────────────────────────
+
+    /// <summary>Returns TimeSeries configuration for a collection.</summary>
+    public TimeSeriesInfo GetTimeSeriesInfo(string? databaseId, string collection)
+    {
+        var engine = _registry.GetEngine(databaseId);
+        var (isTs, retentionMs, ttlField) = engine.GetTimeSeriesConfig(collection);
+        return new TimeSeriesInfo(isTs, retentionMs, ttlField);
+    }
+
+    /// <summary>
+    /// Configures the collection as a TimeSeries with a TTL field and retention policy.
+    /// This operation is irreversible.
+    /// </summary>
+    public void ConfigureTimeSeries(string? databaseId, string collection,
+        string ttlFieldName, TimeSpan retentionPolicy)
+    {
+        var engine = _registry.GetEngine(databaseId);
+        engine.SetTimeSeries(collection, ttlFieldName, retentionPolicy);
     }
 
     /// <summary>
@@ -640,3 +702,11 @@ public sealed record ServerInfo(
 public sealed record CollectionInfo(string Name);
 
 public sealed record DocumentRow(BsonId Id, Dictionary<string, string> Fields);
+
+public sealed record TimeSeriesInfo(bool IsTimeSeries, long RetentionPolicyMs, string? TtlFieldName);
+
+public sealed record SchemaFieldInfo(string Name, BsonType Type, bool IsNullable);
+
+public sealed record CollectionSchemaInfo(
+    bool HasSchema, string? Title, int? Version, int VersionCount,
+    IReadOnlyList<SchemaFieldInfo> Fields);

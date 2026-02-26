@@ -3,10 +3,11 @@
     "BLite.Server": {
       "commandName": "Project",
       "launchBrowser": true,
+      "launchUrl": "https://localhost:2628",
       "environmentVariables": {
         "ASPNETCORE_ENVIRONMENT": "Development"
       },
-      "applicationUrl": "https://localhost:58976;http://localhost:58977"
+      "applicationUrl": "https://localhost:2628"
     }
   }
 }

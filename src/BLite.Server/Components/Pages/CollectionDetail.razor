@@ -35,6 +35,19 @@
         <div class="card-label">Indexes</div>
         <div class="card-value">@_indexDescriptors.Count</div>
     </div>
+    <div class="card">
+        <div class="card-label">TimeSeries</div>
+        <div class="card-value">
+            @if (_timeSeriesInfo.IsTimeSeries)
+            {
+                <span class="badge badge-vector">enabled</span>
+            }
+            else
+            {
+                <span style="color:var(--text-dim);font-size:13px">no</span>
+            }
+        </div>
+    </div>
     <div class="card" style="display:flex;align-items:center">
         <a href="@DocumentsUrl" class="btn btn-primary">Browse Documents</a>
     </div>
@@ -167,6 +180,123 @@
     </div>
 </details>
 
+@* ── Schema ──────────────────────────────────────────────────────────────── *@
+<details class="panel">
+    <summary class="panel-title">📋 Schema</summary>
+    <div class="panel-body">
+
+        @if (_schemaInfo.HasSchema)
+        {
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+                <span class="badge badge-btree">v@(_schemaInfo.VersionCount)</span>
+                @if (!string.IsNullOrEmpty(_schemaInfo.Title))
+                {
+                    <span style="font-size:0.9em;color:var(--text-dim)">@_schemaInfo.Title</span>
+                }
+                <span style="font-size:0.8em;color:var(--text-dim);margin-left:auto">
+                    @(_schemaInfo.Fields.Count) field@(_schemaInfo.Fields.Count == 1 ? "" : "s") · saving appends a new version
+                </span>
+            </div>
+        }
+        else
+        {
+            <p style="color:var(--text-dim);margin-bottom:12px;font-size:0.9em">
+                No schema defined. Defining a schema is optional — it documents the expected structure and enables client-side validation.
+            </p>
+        }
+
+        @* ── Draft fields table ── *@
+        @if (_schemaDraft.Count > 0)
+        {
+            <div class="table-scroll" style="margin-bottom:14px">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Type</th>
+                            <th>Nullable</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var f in _schemaDraft.ToList())
+                        {
+                            <tr>
+                                <td class="mono">@f.Name</td>
+                                <td><span class="badge badge-btree" style="font-size:0.78em">@f.Type</span></td>
+                                <td style="color:var(--text-dim)">@(f.IsNullable ? "yes" : "no")</td>
+                                <td>
+                                    <button class="btn btn-small btn-danger"
+                                            @onclick="() => RemoveSchemaField(f)">
+                                        Remove
+                                    </button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+        else
+        {
+            <p class="empty" style="text-align:left;padding:6px 0;margin-bottom:10px">No fields in draft.</p>
+        }
+
+        @* ── Add field ── *@
+        <h2 style="font-size:13px;margin:0 0 8px 0;font-weight:600">Add field</h2>
+        <div class="toolbar" style="flex-wrap:wrap;gap:8px;margin-bottom:10px">
+            <div style="display:flex;flex-direction:column;gap:3px;flex:1;min-width:160px">
+                <label style="font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.04em">Field name</label>
+                <input @bind="_newSchemaFieldName"
+                       list="schema-field-suggestions"
+                       placeholder="e.g. title"
+                       class="input" />
+                <datalist id="schema-field-suggestions">
+                    @foreach (var s in _fieldSamples)
+                    {
+                        <option value="@s.Path" />
+                    }
+                </datalist>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:3px;min-width:130px">
+                <label style="font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.04em">Type</label>
+                <select class="input" @bind="_newSchemaFieldTypeInt">
+                    @foreach (var t in _schemaFieldTypes)
+                    {
+                        <option value="@((int)t)">@t</option>
+                    }
+                </select>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:3px;justify-content:flex-end">
+                <label style="font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.04em">&nbsp;</label>
+                <label style="display:flex;align-items:center;gap:6px;color:var(--text-dim);font-size:13px;height:32px">
+                    <input type="checkbox" @bind="_newSchemaFieldNullable" /> Nullable
+                </label>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:3px;justify-content:flex-end">
+                <label style="font-size:11px;color:transparent;letter-spacing:.04em">add</label>
+                <button class="btn btn-primary btn-small"
+                        @onclick="AddSchemaField"
+                        disabled="@string.IsNullOrWhiteSpace(_newSchemaFieldName)">
+                    Add
+                </button>
+            </div>
+        </div>
+
+        @* ── Schema title + save ── *@
+        <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end">
+            <div style="display:flex;flex-direction:column;gap:3px;flex:1;min-width:200px">
+                <label style="font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.04em">Schema title (optional)</label>
+                <input @bind="_schemaTitle" placeholder="e.g. Product" class="input" />
+            </div>
+            <button class="btn btn-primary" @onclick="SaveSchema">
+                Save Schema
+            </button>
+        </div>
+
+    </div>
+</details>
+
 @* ── VectorSource Configuration ──────────────────────────────────────────── *@
 <details class="panel">
     <summary class="panel-title">🧠 Embedding Configuration</summary>
@@ -182,7 +312,7 @@
         {
             <div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);padding:10px;margin-bottom:12px">
                 <div style="font-size:0.85em;color:var(--text-dim);margin-bottom:8px">
-                    <strong>Separator:</strong> <code>@_vectorSource.Separator</code><br/>
+                    <strong>Separator:</strong> <code>@_vectorSource.Separator</code><br />
                     <strong>Fields:</strong> @_vectorSource.Fields.Count configured
                 </div>
                 <button class="btn btn-small btn-danger" @onclick="ClearVectorSource">Clear Configuration</button>
@@ -195,7 +325,7 @@
                 <input @bind="_newFieldPath" placeholder="Field path (e.g. title)" class="input" style="min-width:150px" />
                 <input @bind="_newFieldPrefix" placeholder="Prefix (optional)" class="input" style="min-width:120px" />
                 <input @bind="_newFieldSuffix" placeholder="Suffix (optional)" class="input" style="min-width:120px" />
-                <button class="btn btn-primary btn-small" 
+                <button class="btn btn-primary btn-small"
                         @onclick="AddVectorSourceField"
                         disabled="@string.IsNullOrWhiteSpace(_newFieldPath)">
                     Add Field
@@ -210,7 +340,76 @@
     </div>
 </details>
 
-@* ── BLQL Query ──────────────────────────────────────────────────────────── *@
+@* ── TimeSeries ──────────────────────────────────────────────────────────── *@
+<details class="panel">
+    <summary class="panel-title">⏱ TimeSeries</summary>
+    <div class="panel-body">
+
+        @if (_timeSeriesInfo.IsTimeSeries)
+        {
+            <div class="alert alert-ok" style="margin-bottom:12px">This collection is configured as TimeSeries.</div>
+            <table class="data-table" style="max-width:400px">
+                <tbody>
+                    <tr>
+                        <td style="color:var(--text-dim)">TTL field</td>
+                        <td class="mono">@_timeSeriesInfo.TtlFieldName</td>
+                    </tr>
+                    <tr>
+                        <td style="color:var(--text-dim)">Retention</td>
+                        <td>@(_timeSeriesInfo.RetentionPolicyMs / 86_400_000.0) days</td>
+                    </tr>
+                </tbody>
+            </table>
+        }
+        else
+        {
+            <p style="color:var(--text-dim);font-size:0.9em;margin-bottom:12px">
+                Enable TimeSeries mode to use time-ordered storage with automatic TTL-based pruning.
+                <strong>This operation is irreversible.</strong>
+            </p>
+            <div style="background:color-mix(in srgb,var(--warning,#b45309) 10%,transparent);border:1px solid color-mix(in srgb,var(--warning,#b45309) 40%,transparent);border-radius:var(--radius);padding:12px 14px;margin-bottom:16px;font-size:0.875em">
+                <div style="font-weight:600;margin-bottom:6px">⚠ Converting an existing collection</div>
+                <ul style="margin:0;padding-left:18px;line-height:1.7;color:var(--text-dim)">
+                    <li><strong>Existing documents are NOT migrated.</strong> They stay in their original slotted pages and are never pruned by the retention policy.</li>
+                    <li>All indexes remain valid — primary B-Tree and secondary indexes continue to serve both old and new documents.</li>
+                    <li>Only documents inserted <em>after</em> enabling TimeSeries are written to TS pages and subject to pruning.</li>
+                    <li><strong>One-way operation</strong> — there is no built-in way to revert to standard mode once enabled.</li>
+                </ul>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:8px;max-width:400px">
+                <div style="display:flex;flex-direction:column;gap:3px">
+                    <label style="font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.04em">TTL field name</label>
+                    <input @bind="_tsTtlField"
+                           list="ts-field-suggestions"
+                           placeholder="e.g. timestamp"
+                           class="input" />
+                    <datalist id="ts-field-suggestions">
+                        @foreach (var f in _fieldSamples.Where(s => s.Type == BsonType.DateTime || s.Type == BsonType.Int64))
+                        {
+                            <option value="@f.Path">@f.Type</option>
+                        }
+                    </datalist>
+                </div>
+                <div style="display:flex;flex-direction:column;gap:3px">
+                    <label style="font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.04em">Retention (days)</label>
+                    <input type="number" @bind="_tsRetentionDays" min="1" class="input" style="width:140px" />
+                </div>
+                <label style="display:flex;align-items:center;gap:6px;color:var(--text-dim);font-size:13px">
+                    <input type="checkbox" @bind="_tsConfirmed" />
+                    I understand this cannot be undone
+                </label>
+                <button class="btn btn-primary"
+                        @onclick="ConfigureTimeSeries"
+                        disabled="@(!_tsConfirmed || string.IsNullOrWhiteSpace(_tsTtlField) || _tsRetentionDays < 1)">
+                    Enable TimeSeries
+                </button>
+            </div>
+        }
+
+    </div>
+</details>
+
+@* ── BLQL Query ────────────────────────────────────────────────── *@
 <details class="panel">
     <summary class="panel-title">🔎 BLQL Query</summary>
     <div class="panel-body">
@@ -320,6 +519,26 @@
     private string _newFieldSuffix = "";
     private string _vectorSeparator = " ";
 
+    // ── Schema ──
+    private CollectionSchemaInfo _schemaInfo = new(false, null, null, 0, []);
+    private string _schemaTitle         = "";
+    private List<SchemaFieldInfo> _schemaDraft = [];
+    private string   _newSchemaFieldName     = "";
+    private int      _newSchemaFieldTypeInt  = (int)BsonType.String;
+    private bool     _newSchemaFieldNullable = true;
+    private static readonly BsonType[] _schemaFieldTypes =
+    [
+        BsonType.String, BsonType.Int32, BsonType.Int64, BsonType.Double,
+        BsonType.Boolean, BsonType.DateTime, BsonType.ObjectId,
+        BsonType.Array, BsonType.Document, BsonType.Binary, BsonType.Decimal128, BsonType.Null
+    ];
+
+    // ── TimeSeries ──
+    private TimeSeriesInfo _timeSeriesInfo = new(false, 0, null);
+    private string _tsTtlField       = "";
+    private double _tsRetentionDays  = 30;
+    private bool   _tsConfirmed;
+
     // ── Computed helpers ──
     private string DecodedCollection => Uri.UnescapeDataString(Collection);
     private string? DbId => string.IsNullOrEmpty(DatabaseId) ? null : Uri.UnescapeDataString(DatabaseId);
@@ -365,6 +584,8 @@
             _indexDescriptors = Studio.GetIndexDescriptors(DbId, DecodedCollection);
             _fieldSamples     = Studio.SampleFields(DbId, DecodedCollection);
             LoadVectorSource();
+            LoadSchema();
+            _timeSeriesInfo   = Studio.GetTimeSeriesInfo(DbId, DecodedCollection);
             _isError = false;
         }
         catch (Exception ex)
@@ -475,7 +696,76 @@
         _blqlColumns = [];
     }
 
-    // ── VectorSource handlers ────────────────────────────────────────────────
+    // ── Schema handlers ─────────────────────────────────────────
+
+    private void LoadSchema()
+    {
+        try
+        {
+            _schemaInfo = Studio.GetSchema(DbId, DecodedCollection);
+            _schemaTitle = _schemaInfo.Title ?? "";
+            _schemaDraft = [.._schemaInfo.Fields];
+        }
+        catch
+        {
+            _schemaInfo = new(false, null, null, 0, []);
+            _schemaDraft = [];
+        }
+    }
+
+    private void AddSchemaField()
+    {
+        if (string.IsNullOrWhiteSpace(_newSchemaFieldName)) return;
+        var name = _newSchemaFieldName.Trim();
+        if (_schemaDraft.Any(f => f.Name.Equals(name, StringComparison.OrdinalIgnoreCase)))
+            return;
+        _schemaDraft.Add(new SchemaFieldInfo(name, (BsonType)_newSchemaFieldTypeInt, _newSchemaFieldNullable));
+        _newSchemaFieldName = "";
+        _newSchemaFieldNullable = true;
+        StateHasChanged();
+    }
+
+    private void RemoveSchemaField(SchemaFieldInfo field)
+    {
+        _schemaDraft.Remove(field);
+        StateHasChanged();
+    }
+
+    private async Task SaveSchema()
+    {
+        _message = "";
+        _isError = false;
+        try
+        {
+            await Studio.SetSchemaAsync(DbId, DecodedCollection, _schemaTitle, _schemaDraft);
+            _message = $"Schema v{_schemaInfo.VersionCount + 1} saved ({_schemaDraft.Count} field{(_schemaDraft.Count == 1 ? "" : "s")}).";
+            Refresh();
+        }
+        catch (Exception ex) { _message = ex.Message; _isError = true; }
+    }
+
+    // ── TimeSeries handler ─────────────────────────────────────────
+
+    private void ConfigureTimeSeries()
+    {
+        _message = "";
+        _isError = false;
+        try
+        {
+            Studio.ConfigureTimeSeries(
+                DbId, DecodedCollection,
+                _tsTtlField.Trim(),
+                TimeSpan.FromDays(_tsRetentionDays));
+            _message = $"TimeSeries enabled. TTL field: '{_tsTtlField}', retention: {_tsRetentionDays} days.";
+            _tsTtlField      = "";
+            _tsRetentionDays = 30;
+            _tsConfirmed     = false;
+            Refresh();
+        }
+        catch (Exception ex) { _message = ex.Message; _isError = true; }
+    }
+
+    // ── VectorSource handlers ─────────────────────────────────────────
 
     private void LoadVectorSource()
     {
@@ -509,7 +799,7 @@
         StateHasChanged();
     }
 
-    private void SaveVectorSource()
+    private async Task SaveVectorSource()
     {
         _message = "";
         _isError = false;
@@ -521,20 +811,20 @@
             if (_vectorSource != null)
                 _vectorSource.Separator = string.IsNullOrWhiteSpace(_vectorSeparator) ? " " : _vectorSeparator;
 
-            Studio.SetVectorSource(DbId, DecodedCollection, _vectorSource);
+            await Studio.SetVectorSourceAsync(DbId, DecodedCollection, _vectorSource);
             _message = _vectorSource == null ? "Configuration cleared." : "Configuration saved.";
             Refresh();
         }
         catch (Exception ex) { _message = ex.Message; _isError = true; }
     }
 
-    private void ClearVectorSource()
+    private async Task ClearVectorSource()
     {
         _message = "";
         _isError = false;
         try
         {
-            Studio.SetVectorSource(DbId, DecodedCollection, null);
+            await Studio.SetVectorSourceAsync(DbId, DecodedCollection, null);
             _vectorSource = null;
             _message = "Configuration cleared.";
             Refresh();

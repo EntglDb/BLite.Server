@@ -8,6 +8,7 @@
 using BLite.Core.Storage;
 using BLite.Server.Auth;
 using BLite.Server.Caching;
+using BLite.Server.Embedding;
 
 namespace BLite.Server.Rest;
 
@@ -186,22 +187,26 @@ internal static class RestApiCollectionsExtensions
 
         // PUT /api/v1/{dbId}/{collection}/vector-source
         group.MapPut("/{dbId}/{collection}/vector-source",
-            (HttpContext ctx,
+            async (HttpContext ctx,
              EngineRegistry registry,
+             EmbeddingQueuePopulator populator,
              string dbId,
              string collection,
-             VectorSourceConfigDto? dto) =>
+             VectorSourceConfigDto? dto,
+             CancellationToken ct) =>
             {
                 var user = (BLiteUser)ctx.Items[nameof(BLiteUser)]!;
                 try
                 {
                     var physical = NamespaceResolver.Resolve(user, collection);
-                    var engine = registry.GetEngine(RestApiExtensions.NullIfDefault(dbId));
+                    var realDb = RestApiExtensions.NullIfDefault(dbId);
+                    var engine = registry.GetEngine(realDb);
 
                     // dto == null → clear configuration
                     if (dto == null)
                     {
                         engine.SetVectorSource(physical, null);
+                        await populator.RefreshSubscriptionAsync(realDb, physical, ct);
                         return Results.NoContent();
                     }
 
@@ -228,11 +233,10 @@ internal static class RestApiCollectionsExtensions
                     }
 
                     if (config.Fields.Count == 0)
-                    {
                         return Results.BadRequest(new { error = "At least one field is required." });
-                    }
 
                     engine.SetVectorSource(physical, config);
+                    await populator.RefreshSubscriptionAsync(realDb, physical, ct);
                     return Results.NoContent();
                 }
                 catch (InvalidOperationException ex)
@@ -249,17 +253,21 @@ internal static class RestApiCollectionsExtensions
 
         // DELETE /api/v1/{dbId}/{collection}/vector-source
         group.MapDelete("/{dbId}/{collection}/vector-source",
-            (HttpContext ctx,
+            async (HttpContext ctx,
              EngineRegistry registry,
+             EmbeddingQueuePopulator populator,
              string dbId,
-             string collection) =>
+             string collection,
+             CancellationToken ct) =>
             {
                 var user = (BLiteUser)ctx.Items[nameof(BLiteUser)]!;
                 try
                 {
                     var physical = NamespaceResolver.Resolve(user, collection);
-                    var engine = registry.GetEngine(RestApiExtensions.NullIfDefault(dbId));
+                    var realDb = RestApiExtensions.NullIfDefault(dbId);
+                    var engine = registry.GetEngine(realDb);
                     engine.SetVectorSource(physical, null);
+                    await populator.RefreshSubscriptionAsync(realDb, physical, ct);
                     return Results.NoContent();
                 }
                 catch (InvalidOperationException ex)
@@ -273,6 +281,171 @@ internal static class RestApiCollectionsExtensions
             .AddEndpointFilter(new PermissionFilter(BLiteOperation.Update, checkDb: true))
             .WithSummary("Clear VectorSource configuration")
             .WithDescription("Removes the embedding configuration from the collection.");
+
+        // GET /api/v1/{dbId}/{collection}/timeseries
+        group.MapGet("/{dbId}/{collection}/timeseries",
+            (HttpContext ctx,
+             EngineRegistry registry,
+             string dbId,
+             string collection) =>
+            {
+                var user = (BLiteUser)ctx.Items[nameof(BLiteUser)]!;
+                try
+                {
+                    var physical = NamespaceResolver.Resolve(user, collection);
+                    var engine = registry.GetEngine(RestApiExtensions.NullIfDefault(dbId));
+                    var (isTs, retentionMs, ttlField) = engine.GetTimeSeriesConfig(physical);
+                    return Results.Ok(new
+                    {
+                        isTimeSeries = isTs,
+                        ttlFieldName = ttlField,
+                        retentionMs
+                    });
+                }
+                catch (InvalidOperationException ex)
+                {
+                    return Results.Problem(
+                        title: "Not Found",
+                        detail: ex.Message,
+                        statusCode: StatusCodes.Status404NotFound);
+                }
+            })
+            .AddEndpointFilter(new PermissionFilter(BLiteOperation.Query, checkDb: true))
+            .WithSummary("Get TimeSeries configuration")
+            .WithDescription("Returns the TimeSeries configuration for the collection. isTimeSeries is false when the collection has not been configured as a TimeSeries.");
+
+        // PUT /api/v1/{dbId}/{collection}/timeseries
+        group.MapPut("/{dbId}/{collection}/timeseries",
+            (HttpContext ctx,
+             EngineRegistry registry,
+             string dbId,
+             string collection,
+             ConfigureTimeSeriesDto req) =>
+            {
+                if (string.IsNullOrWhiteSpace(req.TtlFieldName))
+                    return Results.ValidationProblem(new Dictionary<string, string[]>
+                    {
+                        ["ttlFieldName"] = ["ttlFieldName is required."]
+                    });
+                if (req.RetentionMs <= 0)
+                    return Results.ValidationProblem(new Dictionary<string, string[]>
+                    {
+                        ["retentionMs"] = ["retentionMs must be a positive value."]
+                    });
+
+                var user = (BLiteUser)ctx.Items[nameof(BLiteUser)]!;
+                try
+                {
+                    var physical = NamespaceResolver.Resolve(user, collection);
+                    var engine = registry.GetEngine(RestApiExtensions.NullIfDefault(dbId));
+                    engine.SetTimeSeries(physical, req.TtlFieldName.Trim(),
+                        TimeSpan.FromMilliseconds(req.RetentionMs));
+                    return Results.NoContent();
+                }
+                catch (InvalidOperationException ex)
+                {
+                    return Results.Problem(
+                        title: "Not Found",
+                        detail: ex.Message,
+                        statusCode: StatusCodes.Status404NotFound);
+                }
+            })
+            .AddEndpointFilter(new PermissionFilter(BLiteOperation.Admin, checkDb: true))
+            .WithSummary("Configure TimeSeries")
+            .WithDescription("Configures the collection as a TimeSeries with a TTL field and retention policy. This operation is irreversible.");
+
+        // GET /api/v1/{dbId}/{collection}/schema
+        group.MapGet("/{dbId}/{collection}/schema",
+            (HttpContext ctx,
+             EngineRegistry registry,
+             string dbId,
+             string collection) =>
+            {
+                var user = (BLiteUser)ctx.Items[nameof(BLiteUser)]!;
+                try
+                {
+                    var physical = NamespaceResolver.Resolve(user, collection);
+                    var engine = registry.GetEngine(RestApiExtensions.NullIfDefault(dbId));
+                    var schemas = engine.GetSchemas(physical);
+                    if (schemas.Count == 0)
+                        return Results.Ok(new { hasSchema = false, title = (string?)null, version = (int?)null, versionCount = 0, fields = Array.Empty<object>() });
+
+                    var latest = schemas[^1];
+                    return Results.Ok(new
+                    {
+                        hasSchema = true,
+                        title = latest.Title,
+                        version = latest.Version,
+                        versionCount = schemas.Count,
+                        fields = latest.Fields.Select(f => new
+                        {
+                            name = f.Name,
+                            type = f.Type.ToString(),
+                            typeCode = (int)f.Type,
+                            nullable = f.IsNullable
+                        }).ToArray()
+                    });
+                }
+                catch (InvalidOperationException ex)
+                {
+                    return Results.Problem(
+                        title: "Not Found",
+                        detail: ex.Message,
+                        statusCode: StatusCodes.Status404NotFound);
+                }
+            })
+            .AddEndpointFilter(new PermissionFilter(BLiteOperation.Query, checkDb: true))
+            .WithSummary("Get collection schema")
+            .WithDescription("Returns the latest schema version for the collection. hasSchema is false when no schema has been defined.");
+
+        // PUT /api/v1/{dbId}/{collection}/schema
+        group.MapPut("/{dbId}/{collection}/schema",
+            async (HttpContext ctx,
+             EngineRegistry registry,
+             string dbId,
+             string collection,
+             SetSchemaDto req,
+             CancellationToken ct) =>
+            {
+                var user = (BLiteUser)ctx.Items[nameof(BLiteUser)]!;
+                try
+                {
+                    var physical = NamespaceResolver.Resolve(user, collection);
+                    var engine = registry.GetEngine(RestApiExtensions.NullIfDefault(dbId));
+                    var schema = new BLite.Bson.BsonSchema
+                    {
+                        Title = string.IsNullOrWhiteSpace(req.Title) ? null : req.Title.Trim()
+                    };
+                    foreach (var f in req.Fields ?? [])
+                    {
+                        if (string.IsNullOrWhiteSpace(f.Name)) continue;
+                        if (!Enum.TryParse<BLite.Bson.BsonType>(f.Type, ignoreCase: true, out var bsonType))
+                            return Results.ValidationProblem(new Dictionary<string, string[]>
+                            {
+                                ["type"] = [$"Unknown BsonType '{f.Type}'."]
+                            });
+                        schema.Fields.Add(new BLite.Bson.BsonField
+                        {
+                            Name = f.Name.Trim(),
+                            Type = bsonType,
+                            IsNullable = f.Nullable
+                        });
+                    }
+                    engine.SetSchema(physical, schema);
+                    await engine.CommitAsync(ct);
+                    return Results.NoContent();
+                }
+                catch (InvalidOperationException ex)
+                {
+                    return Results.Problem(
+                        title: "Not Found",
+                        detail: ex.Message,
+                        statusCode: StatusCodes.Status404NotFound);
+                }
+            })
+            .AddEndpointFilter(new PermissionFilter(BLiteOperation.Admin, checkDb: true))
+            .WithSummary("Set collection schema")
+            .WithDescription("Appends a new schema version to the collection. Each call creates a new version; existing versions are retained.");
     }
 }
 
@@ -290,4 +463,29 @@ internal class VectorSourceFieldDto
     public string? Path { get; set; }
     public string? Prefix { get; set; }
     public string? Suffix { get; set; }
+}
+
+/// <summary>
+/// DTO for configuring TimeSeries on a collection (REST API).
+/// </summary>
+internal class ConfigureTimeSeriesDto
+{
+    public string? TtlFieldName { get; set; }
+    public long RetentionMs { get; set; }
+}
+
+/// <summary>
+/// DTO for setting a schema on a collection (REST API).
+/// </summary>
+internal class SetSchemaDto
+{
+    public string? Title { get; set; }
+    public List<SetSchemaFieldDto>? Fields { get; set; }
+}
+
+internal class SetSchemaFieldDto
+{
+    public string? Name { get; set; }
+    public string Type { get; set; } = "String";  // BsonType name (e.g. "String", "Int32")
+    public bool Nullable { get; set; } = true;
 }

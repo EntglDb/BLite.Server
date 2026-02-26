@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <AssemblyName>BLite.Client.IntegrationTests</AssemblyName>
+    <RootNamespace>BLite.Client.IntegrationTests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Test framework -->
+    <PackageReference Include="Microsoft.NET.Test.Sdk"           Version="17.14.1" />
+    <PackageReference Include="xunit"                            Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio"        Version="3.1.4" />
+    <PackageReference Include="coverlet.collector"               Version="6.0.4" />
+    <!-- In-process ASP.NET Core host for gRPC -->
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Client under test -->
+    <ProjectReference Include="..\..\src\BLite.Client\BLite.Client.csproj" />
+    <!-- Server — started in-process via WebApplicationFactory<Program> -->
+    <ProjectReference Include="..\..\..\BLite.Server\src\BLite.Server\BLite.Server.csproj" />
+    <!-- Source generator: generates IDocumentMapper<TId,T> for classes marked with [DocumentMapper] -->
+    <ProjectReference Include="..\..\..\BLite\src\BLite.SourceGenerators\BLite.SourceGenerators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+</Project>

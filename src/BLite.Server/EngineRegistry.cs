@@ -179,6 +179,19 @@ public sealed class EngineRegistry : IDisposable
     // ── Discovery ─────────────────────────────────────────────────────────────
 
     /// <summary>
+    /// Returns all currently active engines (system + loaded tenants).
+    /// Does NOT open new engines — only returns those already in memory.
+    /// </summary>
+    public IEnumerable<(string? DbId, BLiteEngine Engine)> GetAllActiveEngines()
+    {
+        foreach (var (key, engine) in _active)
+        {
+            var dbId = string.IsNullOrEmpty(key) ? null : key;
+            yield return (dbId, engine);
+        }
+    }
+
+    /// <summary>
     /// Returns metadata about all tenant databases found in <see cref="DatabasesDirectory"/>.
     /// A database is "active" if its engine is currently open in memory.
     /// </summary>
