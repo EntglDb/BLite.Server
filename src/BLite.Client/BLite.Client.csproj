@@ -8,6 +8,18 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <RootNamespace>BLite.Client</RootNamespace>
     <AssemblyName>BLite.Client</AssemblyName>
+
+    <Version>1.0.0</Version>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
+    <Authors>BLite Team</Authors>
+    <Company>EntglDb</Company>
+    <Copyright>Copyright © 2026 Luca Fabbri</Copyright>
+    <Description>.NET client SDK for BLite Server — provides typed access over gRPC.</Description>
+    <RepositoryUrl>https://github.com/EntglDb/BLite.Server</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageLicenseExpression>AGPL-3.0-only</PackageLicenseExpression>
+    <PackageTags>database;client;grpc;bson;nosql;blite</PackageTags>
   </PropertyGroup>
 
   <ItemGroup>    <InternalsVisibleTo Include="BLite.Client.IntegrationTests" />

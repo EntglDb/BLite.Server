@@ -7,6 +7,17 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <RootNamespace>BLite.Proto</RootNamespace>
     <AssemblyName>BLite.Proto</AssemblyName>
+
+    <Version>1.0.0</Version>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
+    <Authors>BLite Team</Authors>
+    <Company>EntglDb</Company>
+    <Copyright>Copyright © 2026 Luca Fabbri</Copyright>
+    <Description>Protobuf contracts and generated gRPC stubs for BLite Server.</Description>
+    <RepositoryUrl>https://github.com/EntglDb/BLite.Server</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageLicenseExpression>AGPL-3.0-only</PackageLicenseExpression>
   </PropertyGroup>
 
   <!-- protoc + gRPC codegen -->
