@@ -470,7 +470,8 @@ public sealed class DynamicServiceImpl : DynamicService.DynamicServiceBase
                 Name       = d.Name,
                 Field      = d.FieldPath,
                 Type       = d.Type.ToString(),
-                Unique     = d.IsUnique,
+                // TODO: expose IsUnique in DynamicIndexDescriptor (BLite engine)
+                Unique     = false,
                 Dimensions = d.Dimensions,
                 Metric     = d.Metric.ToString()
             }));
