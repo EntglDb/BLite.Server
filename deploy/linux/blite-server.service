@@ -1,0 +1,39 @@
+# BLite Server — systemd service unit
+# Copyright (C) 2026 Luca Fabbri — AGPL-3.0
+#
+# Installed by the Linux installer (install.sh) to /etc/systemd/system/blite-server.service.
+# Configuration lives in /etc/blite-server/environment (written by the installer).
+
+[Unit]
+Description=BLite Server — self-hosted database (gRPC + REST + Studio)
+Documentation=https://github.com/EntglDb/BLite.Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+User=blite
+Group=blite
+
+WorkingDirectory=/opt/blite-server
+ExecStart=/opt/blite-server/BLite.Server
+
+# Load site-local configuration (ports, root key, data paths, etc.)
+EnvironmentFile=-/etc/blite-server/environment
+
+# Keep the process alive; restart after a crash
+Restart=on-failure
+RestartSec=5s
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/var/lib/blite-server
+
+# Give the process enough time to start (embedding model load can be slow)
+TimeoutStartSec=120
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

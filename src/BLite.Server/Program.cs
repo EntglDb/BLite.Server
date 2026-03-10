@@ -24,6 +24,11 @@ using Scalar.AspNetCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Support running as a Windows Service or a Linux systemd daemon.
+// These calls are safe no-ops when the process is not managed by the respective supervisor.
+builder.Host.UseWindowsService();
+builder.Host.UseSystemd();
+
 // ── Configuration ─────────────────────────────────────────────────────────────
 var serverConfig = builder.Configuration.GetSection("BLiteServer");
 var dbPath = serverConfig.GetValue<string>("DatabasePath") ?? "blite.db";
@@ -221,6 +226,18 @@ bool portsAreSeparate = restHostFilter is not null
 // ── Bootstrap: load users from DB, ensure root exists ────────────────────────
 var userRepo = app.Services.GetRequiredService<UserRepository>();
 await userRepo.LoadAllAsync();
+
+// Auto-provision root user from configuration (installer / Docker / headless deployments).
+// Set Auth__RootKey as an environment variable (or write it in appsettings.Production.json)
+// to skip the interactive Studio setup wizard on first start.  The provisioning is
+// idempotent: if a root user already exists the call is a no-op.
+var rootKey = app.Configuration.GetValue<string>("Auth:RootKey");
+if (!string.IsNullOrWhiteSpace(rootKey) && !setupService.IsSetupComplete)
+{
+    await userRepo.EnsureRootAsync(rootKey);
+    await setupService.MarkCompleteAsync();
+    app.Logger.LogInformation("Root user provisioned from Auth:RootKey configuration.");
+}
 
 if (setupService.IsSetupComplete)
 {
