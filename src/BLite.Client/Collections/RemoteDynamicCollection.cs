@@ -480,6 +480,20 @@ public sealed class RemoteDynamicCollection
             response.RetentionMs);
     }
 
+    /// <summary>
+    /// Forces an immediate retention prune on this TimeSeries collection,
+    /// removing all documents older than the configured retention window.
+    /// Requires <c>Admin</c> permission.
+    /// </summary>
+    public async Task ForcePruneAsync(CancellationToken ct = default)
+    {
+        var response = await _stub.ForcePruneAsync(
+            new CollectionRequest { Collection = Name },
+            _headers, cancellationToken: ct);
+
+        ThrowIfError(response.Error, nameof(ForcePruneAsync));
+    }
+
     // ── Schema management ─────────────────────────────────────────────────────
 
     /// <summary>

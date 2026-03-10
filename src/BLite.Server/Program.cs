@@ -260,6 +260,7 @@ app.MapGrpcService<DocumentServiceImpl>();
 app.MapGrpcService<MetadataServiceImpl>();
 app.MapGrpcService<AdminServiceImpl>();
 app.MapGrpcService<TransactionServiceImpl>();
+app.MapGrpcService<KvServiceImpl>();
 
 // REST API endpoints (/api/v1/...)
 app.MapBliteRestApi(portsAreSeparate ? restHostFilter : null);

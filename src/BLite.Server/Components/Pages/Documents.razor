@@ -200,7 +200,7 @@
 
         try
         {
-            _editJson = await Studio.GetDocumentAsJsonAsync(DbId, Uri.UnescapeDataString(Collection), id);
+            _editJson = await Studio.GetDocumentAsJsonAsync(DbId, Uri.UnescapeDataString(Collection), id) ?? "";
 
             if (_showEmbeddingPanel)
                 _embeddingText = Studio.BuildEmbeddingTextById(DbId, Uri.UnescapeDataString(Collection), id);

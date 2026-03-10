@@ -4,31 +4,49 @@
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen)](https://github.com/EntglDb/BLite.Server)
 
 **BLite Server** is a high-performance, self-hosted database server built on top of the [BLite](https://github.com/EntglDb/BLite) embedded engine.  
-It exposes BLite's full capabilities — schema-less BSON documents and typed strongly-typed collections — over a **gRPC / Protocol Buffers** transport, hosted on **ASP.NET Core / Kestrel**.
+It exposes BLite's full capabilities over three interfaces — a **gRPC** endpoint for the .NET SDK, a **REST API** for cross-language access, and a **Blazor Studio** web UI for administration — all hosted on **ASP.NET Core / Kestrel**.
 
-> **Status**: Active development — core server + auth + observability + transactions complete. Client SDK in progress.
+---
+
+## Endpoints
+
+| Endpoint | Default Port | Protocol | Purpose |
+|---|---|---|---|
+| gRPC | `2626` | HTTP/2, TLS | BLite.Client SDK, high-throughput streaming |
+| REST API | `2627` | HTTP/1.1 + HTTP/2 | Cross-language clients, tooling, CI |
+| Studio | `2628` | HTTP/1.1 + HTTP/2 | Blazor Server admin UI |
 
 ---
 
 ## Architecture
 
 ```
-Client (BLite.Client SDK)
-  ├── IBLiteQueryable<T>  ──── ExpressionToDescriptorVisitor ──┐
-  └── RemoteDynamicClient ─── BsonDocument ↔ bytes ────────────┤
-                                                               │
-                      gRPC (HTTP/2, TLS) — port 2626           │
-                           API-Key header                      │
-                                                               ▼
-BLite.Server (ASP.NET Core + Kestrel)
-  ├── ApiKeyMiddleware      → resolve BLiteUser + namespace
-  ├── TelemetryInterceptor  → OTel trace + metrics for every RPC
-  ├── DynamicService        (schema-less CRUD + streaming Query + Bulk)
-  ├── DocumentService       (typed Query / Insert / Update / Delete / BulkInsert)
-  ├── AdminService          (user management, permissions)
-  ├── TransactionService    (Begin / Commit / Rollback)
-  └── QueryDescriptorExecutor
-        └── BLiteEngine / DynamicCollection (BTree, WAL, HNSW, RTree)
+┌──────────────────────────────────────────────────────────────────────┐
+│                            BLite.Server                              │
+│                                                                      │
+│  ┌──────────────────┐  ┌──────────────────────┐  ┌────────────────┐  │
+│  │   gRPC :2626     │  │    REST /api/v1 :2627 │  │  Studio :2628  │  │
+│  │  DynamicService  │  │  Minimal API endpoints│  │  Blazor Server │  │
+│  │  DocumentService │  │  PermissionFilter     │  │  StudioService │  │
+│  │  AdminService    │  │  RestAuthFilter       │  │  StudioSession │  │
+│  │  MetadataService │  │  OpenAPI / Scalar     │  └───────┬────────┘  │
+│  │  TransactionSvc  │  └───────────┬───────────┘          │           │
+│  │  KvService       │              │                      │           │
+│  └────────┬─────────┘              │                      │           │
+│           └──────────────┬─────────┘                      │           │
+│                          ▼                                 │           │
+│                 ┌─────────────────┐◄───────────────────────┘           │
+│                 │  EngineRegistry │                                    │
+│                 │  (singleton)    │                                    │
+│                 └────────┬────────┘                                    │
+│                          │  one BLiteEngine per database              │
+│                          ▼                                             │
+│                 ┌─────────────────┐                                    │
+│                 │   BLiteEngine   │  (sibling repo: BLite)            │
+│                 │   + Collections │                                    │
+│                 │   + KvStore     │                                    │
+│                 └─────────────────┘                                    │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Projects
@@ -36,74 +54,66 @@ BLite.Server (ASP.NET Core + Kestrel)
 | Project | Description |
 |---|---|
 | `BLite.Proto` | Shared `.proto` contracts + `QueryDescriptor` (MessagePack) |
-| `BLite.Server` | ASP.NET Core gRPC host, service implementations, auth, observability, transactions |
-| `BLite.Client` _(in progress)_ | .NET client SDK with `RemoteQueryProvider` and `IBLiteQueryable<T>` |
+| `BLite.Server` | ASP.NET Core host — gRPC services, REST API, Blazor Studio, auth, observability |
+| `BLite.Client` | .NET client SDK — `RemoteDynamicCollection`, `RemoteCollection<TId,T>`, `RemoteKvStore` |
 
 ---
 
-## Why gRPC?
+## gRPC Services
 
-| Feature | REST/JSON | gRPC/Protobuf |
-|---|---|---|
-| Transport | HTTP/1.1 | HTTP/2 (multiplexed frames) |
-| Payload | JSON (double serialization) | Raw BSON bytes |
-| Result streaming | SSE/WebSocket (workaround) | **Native server-streaming** |
-| Expression trees | Custom JSON DSL | `QueryDescriptor` in `bytes` |
-| Cross-language | ✅ | ✅ (proto3 generates all languages) |
-
----
-
-## QueryDescriptor
-
-Expression trees cannot be sent over the wire directly.  
-BLite Server defines a `QueryDescriptor` — a serializable DTO (MessagePack) that maps 1:1 to BLite's internal `QueryModel`:
-
-```csharp
-public sealed class QueryDescriptor
-{
-    public string Collection  { get; set; }
-    public FilterNode? Where  { get; set; }   // predicate tree
-    public ProjectionSpec? Select { get; set; } // scalar field list
-    public List<SortSpec> OrderBy { get; set; }
-    public int? Take { get; set; }
-    public int? Skip { get; set; }
-}
-```
-
-Filter nodes support `BinaryFilter` (field op value) and `LogicalFilter` (AND/OR/NOT), covering the full range of BLite LINQ predicates.  
-The server rebuilds a `Func<BsonSpanReader, bool>` predicate from the descriptor and delegates directly to `DynamicCollection.Scan` / `BsonProjectionCompiler` — **`T` is never instantiated on the server for typed queries**.
-
----
-
-## Service Contract (proto)
+All gRPC calls require an `x-api-key` header.  
+The server enforces per-collection permission checks and transparent namespace isolation.
 
 ```protobuf
 service DynamicService {
-  rpc Insert      (InsertRequest)     returns (InsertResponse);
-  rpc FindById    (FindByIdRequest)   returns (DocumentResponse);
-  rpc Update      (UpdateRequest)     returns (MutationResponse);
-  rpc Delete      (DeleteRequest)     returns (MutationResponse);
-  rpc Query       (QueryRequest)      returns (stream DocumentResponse);
-  rpc InsertBulk  (BulkInsertRequest) returns (BulkInsertResponse);
-  rpc UpdateBulk  (BulkUpdateRequest) returns (BulkMutationResponse);
-  rpc DeleteBulk  (BulkDeleteRequest) returns (BulkMutationResponse);
-  rpc ListCollections (Empty)                returns (CollectionListResponse);
-  rpc DropCollection  (DropCollectionRequest) returns (MutationResponse);
+  // CRUD
+  rpc Insert      (InsertRequest)       returns (InsertResponse);
+  rpc FindById    (FindByIdRequest)     returns (DocumentResponse);
+  rpc Update      (UpdateRequest)       returns (MutationResponse);
+  rpc Delete      (DeleteRequest)       returns (MutationResponse);
+  // Streaming query + vector search
+  rpc Query        (QueryRequest)        returns (stream DocumentResponse);
+  rpc VectorSearch (VectorSearchRequest) returns (stream DocumentResponse);
+  // Bulk operations
+  rpc InsertBulk  (BulkInsertRequest)   returns (BulkInsertResponse);
+  rpc UpdateBulk  (BulkUpdateRequest)   returns (BulkMutationResponse);
+  rpc DeleteBulk  (BulkDeleteRequest)   returns (BulkMutationResponse);
+  // Collection management
+  rpc ListCollections     (Empty)                      returns (CollectionListResponse);
+  rpc DropCollection      (DropCollectionRequest)      returns (MutationResponse);
+  rpc CreateIndex         (CreateIndexRequest)         returns (MutationResponse);
+  rpc DropIndex           (DropIndexRequest)           returns (MutationResponse);
+  rpc ListIndexes         (CollectionRequest)          returns (ListIndexesResponse);
+  // VectorSource (embedding worker)
+  rpc SetVectorSource     (SetVectorSourceRequest)     returns (MutationResponse);
+  rpc GetVectorSource     (CollectionRequest)          returns (GetVectorSourceResponse);
+  // TimeSeries
+  rpc ConfigureTimeSeries (ConfigureTimeSeriesRequest) returns (MutationResponse);
+  rpc GetTimeSeriesInfo   (CollectionRequest)          returns (TimeSeriesResponse);
+  rpc ForcePrune          (CollectionRequest)          returns (MutationResponse);
+  // Schema
+  rpc GetSchema (CollectionRequest)  returns (CollectionSchemaResponse);
+  rpc SetSchema (SetSchemaRequest)   returns (MutationResponse);
 }
 
 service DocumentService {
-  rpc Query      (QueryRequest)          returns (stream TypedDocumentResponse);
-  rpc Insert     (TypedInsertRequest)    returns (InsertResponse);
-  rpc Update     (TypedUpdateRequest)    returns (MutationResponse);
-  rpc Delete     (DeleteRequest)         returns (MutationResponse);
+  // Typed (BSON payload) path — mirrors DynamicService for typed collections
+  rpc Query      (QueryRequest)           returns (stream TypedDocumentResponse);
+  rpc Insert     (TypedInsertRequest)     returns (InsertResponse);
+  rpc Update     (TypedUpdateRequest)     returns (MutationResponse);
+  rpc Delete     (DeleteRequest)          returns (MutationResponse);
   rpc InsertBulk (TypedBulkInsertRequest) returns (BulkInsertResponse);
 }
 
 service AdminService {
-  rpc CreateUser  (CreateUserRequest)  returns (MutationResponse);
-  rpc DeleteUser  (DeleteUserRequest)  returns (MutationResponse);
-  rpc ListUsers   (Empty)              returns (UserListResponse);
-  rpc UpdatePerms (UpdatePermsRequest) returns (MutationResponse);
+  rpc CreateUser        (CreateUserRequest)        returns (CreateUserResponse);
+  rpc RevokeUser        (UsernameRequest)          returns (MutationResponse);
+  rpc RotateKey         (UsernameRequest)          returns (RotateKeyResponse);
+  rpc ListUsers         (Empty)                    returns (ListUsersResponse);
+  rpc UpdatePerms       (UpdatePermsRequest)       returns (MutationResponse);
+  rpc ProvisionTenant   (ProvisionTenantRequest)   returns (ProvisionTenantResponse);
+  rpc DeprovisionTenant (DeprovisionTenantRequest) returns (DeprovisionTenantResponse);
+  rpc ListTenants       (Empty)                    returns (ListTenantsResponse);
 }
 
 service TransactionService {
@@ -111,108 +121,263 @@ service TransactionService {
   rpc Commit   (TransactionRequest)      returns (MutationResponse);
   rpc Rollback (TransactionRequest)      returns (MutationResponse);
 }
+
+service KvService {
+  // Read
+  rpc Get      (KvGetRequest)  returns (KvGetResponse);
+  rpc Exists   (KvKeyRequest)  returns (KvExistsResponse);
+  rpc ScanKeys (KvScanRequest) returns (KvScanResponse);
+  // Write
+  rpc Set      (KvSetRequest)     returns (MutationResponse);
+  rpc Delete   (KvDeleteRequest)  returns (MutationResponse);
+  rpc Refresh  (KvRefreshRequest) returns (MutationResponse);  // extend TTL
+  rpc Batch    (KvBatchRequest)   returns (KvBatchResponse);
+  // Admin
+  rpc PurgeExpired (KvDbRequest) returns (KvPurgeResponse);
+}
 ```
 
-All write RPCs (Insert / Update / Delete / Bulk variants) accept an optional `transaction_id` field.  
-When set, the operation participates in the named server-side transaction instead of auto-committing.
+All write RPCs accept an optional `transaction_id` field.
+
+---
+
+## REST API
+
+Base path: `/api/v1`. All endpoints require `x-api-key` or `Authorization: Bearer <key>`.  
+Interactive docs available at `/scalar` when Studio is enabled.
+
+### Databases (tenant management)
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/databases` | List all tenant databases |
+| `POST` | `/databases` | Provision a new tenant database |
+| `DELETE` | `/databases/{dbId}` | Deprovision a tenant database |
+| `GET` | `/databases/{dbId}/backup` | Download a hot backup as a ZIP file |
+
+### Collections
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/{dbId}/collections` | List collections |
+| `POST` | `/{dbId}/collections` | Create a collection |
+| `DELETE` | `/{dbId}/{collection}` | Drop a collection |
+| `GET` | `/{dbId}/{collection}/vectorsource` | Get VectorSource config |
+| `PUT` | `/{dbId}/{collection}/vectorsource` | Set VectorSource config |
+| `DELETE` | `/{dbId}/{collection}/vectorsource` | Clear VectorSource config |
+| `GET` | `/{dbId}/{collection}/timeseries` | Get TimeSeries config |
+| `PUT` | `/{dbId}/{collection}/timeseries` | Configure TimeSeries + retention |
+| `POST` | `/{dbId}/{collection}/timeseries/prune` | Force retention prune |
+| `GET` | `/{dbId}/{collection}/schema` | Get collection schema |
+| `PUT` | `/{dbId}/{collection}/schema` | Set / append schema version |
+
+### Documents
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/{dbId}/{collection}/documents` | List documents (paginated) |
+| `POST` | `/{dbId}/{collection}/documents` | Insert a document |
+| `GET` | `/{dbId}/{collection}/documents/{id}` | Get document by ID |
+| `PUT` | `/{dbId}/{collection}/documents/{id}` | Replace document |
+| `DELETE` | `/{dbId}/{collection}/documents/{id}` | Delete document |
+| `POST` | `/{dbId}/{collection}/documents/vector-search` | kNN vector search |
+
+### BLQL Query
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/{dbId}/{collection}/query` | BLQL filter + sort query (JSON body) |
+| `GET` | `/{dbId}/{collection}/query` | BLQL query via query-string params |
+| `POST` | `/{dbId}/{collection}/count` | Count documents matching a filter |
+
+### Key-Value Store
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/{dbId}/kv` | Scan keys (optional `?prefix=`) |
+| `GET` | `/{dbId}/kv/{key}` | Get value (Base64-encoded) |
+| `PUT` | `/{dbId}/kv/{key}` | Set value (`{ value, ttlMs? }`) |
+| `DELETE` | `/{dbId}/kv/{key}` | Delete a key |
+| `PATCH` | `/{dbId}/kv/{key}` | Refresh TTL (`{ ttlMs }`) |
+| `POST` | `/{dbId}/kv/purge` | Purge all expired entries |
+| `POST` | `/{dbId}/kv/batch` | Atomic batch set/delete |
+
+### Users
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/users` | List all users |
+| `POST` | `/users` | Create a user |
+| `DELETE` | `/users/{username}` | Delete a user |
+| `PUT` | `/users/{username}/permissions` | Replace user permissions |
+
+---
+
+## BLite.Client SDK
+
+```csharp
+await using var client = new BLiteClient(new BLiteClientOptions
+{
+    Host   = "myserver",
+    Port   = 2626,
+    ApiKey = "blt_...",
+    UseTls = true
+});
+
+// Schema-less collection
+var sensors = client.GetDynamicCollection("sensors");
+var id = await sensors.InsertAsync(new BsonDocument { ["temp"] = 22.5 });
+await foreach (var doc in sensors.QueryAsync(descriptor))
+    Console.WriteLine(doc);
+
+// Typed collection (requires [BLiteMapper])
+var users = client.GetCollection<ObjectId, User>(new UserMapper());
+await users.InsertAsync(new User { Name = "Alice", Age = 30 });
+var result = await users.AsQueryable()
+    .Where(u => u.Age > 25)
+    .OrderBy(u => u.Name)
+    .ToListAsync();
+
+// Explicit transaction
+await using var tx = await client.BeginTransactionAsync();
+await sensors.InsertAsync(doc, tx);
+await tx.CommitAsync();
+
+// Key-Value store
+await client.Kv.SetAsync("session:xyz", Encoding.UTF8.GetBytes("data"), ttl: TimeSpan.FromHours(1));
+var bytes = await client.Kv.GetAsync("session:xyz");
+var count = await client.Kv.BatchAsync(b => b
+    .Set("a", Encoding.UTF8.GetBytes("1"))
+    .Delete("b"));
+
+// Admin
+var apiKey = await client.Admin.CreateUserAsync("alice", namespace: null,
+    permissions: [new UserPermission { Collection = "orders", Ops = BLiteOperation.Write }]);
+await client.Admin.ProvisionTenantAsync("tenant-42");
+```
+
+---
+
+## Studio
+
+The **Blazor Studio** is a built-in administration UI served from the same process.  
+Enable it in `appsettings.json`:
+
+```json
+"Studio": { "Enabled": true },
+"Kestrel": {
+  "Endpoints": {
+    "Grpc":   { "Url": "https://*:2626", "Protocols": "Http2" },
+    "Rest":   { "Url": "https://*:2627", "Protocols": "Http1AndHttp2" },
+    "Studio": { "Url": "https://*:2628", "Protocols": "Http1AndHttp2" }
+  }
+}
+```
+
+Studio pages:
+
+| Page | Path | Description |
+|---|---|---|
+| Dashboard | `/` | Server uptime, version, tenant/user counts |
+| Tenants | `/tenants` | Provision / deprovision tenant databases, download backups |
+| Users | `/users` | Create, revoke, rotate keys, manage permissions |
+| Collections | `/collections` | Browse, create, drop collections; insert JSON documents |
+| Collection detail | `/collection/{name}` | Indexes, VectorSource, TimeSeries, Schema tabs |
+| Documents | `/documents/{name}` | Browse, edit, delete documents; BLQL query |
+| Key-Value | `/kv` | Browse keys, set/edit/delete entries, purge expired |
+| Embedding | `/embedding` | Load ONNX model, test embeddings, cosine-similarity sandbox |
+
+First startup navigates to `/setup` to create the `root` admin user.
 
 ---
 
 ## Authentication & Multi-tenancy
 
-Every request must carry an `x-api-key` header.  
-The server resolves the caller to a `BLiteUser` with a scoped permission set:
+Every request must carry an `x-api-key` header (or `Authorization: Bearer <key>` for REST).
 
-| Permission | Operations |
+**Permissions** (`[Flags]` enum — composable):
+
+| Flag | Allowed operations |
 |---|---|
-| `Query` | read-only (FindById, Query) |
-| `Insert` / `Update` / `Delete` | write |
+| `Query` | FindById, Query, VectorSearch, ScanKeys, Get, Exists |
+| `Insert` | Insert, InsertBulk, KV Set |
+| `Update` | Update, UpdateBulk, KV Refresh, KV Batch |
+| `Delete` | Delete, DeleteBulk, KV Delete |
 | `Drop` | DropCollection |
-| `Admin` | full access + user management |
+| `Admin` | All of the above + user management + tenant management + PurgeExpired |
 
-Collections are automatically **namespaced by user** — user `alice` accessing `orders` operates on the isolated logical collection `alice::orders`.  
-The `root` user bypasses namespacing and has full access.
+**Namespace isolation** — users with a `Namespace` field operate inside a transparent prefix.  
+Physical name: `"<namespace>:<logical_name>"`.  Always resolved via `NamespaceResolver.Resolve`.
+
+**Database isolation** — users with a `DatabaseId` are restricted to one tenant engine.
+
+---
+
+## QueryDescriptor
+
+Expression trees are serialized as a `QueryDescriptor` (MessagePack) sent in the `query_descriptor` bytes field:
+
+```csharp
+public sealed class QueryDescriptor
+{
+    public string         Collection { get; set; }
+    public FilterNode?    Where      { get; set; }   // BinaryFilter | LogicalFilter
+    public ProjectionSpec? Select    { get; set; }
+    public List<SortSpec> OrderBy    { get; set; }
+    public int?           Skip       { get; set; }
+    public int?           Take       { get; set; }
+}
+```
+
+The server rebuilds native BLite predicates from the descriptor — `T` is never instantiated on the server.
 
 ---
 
 ## Transactions
 
-BLite Server supports explicit, token-scoped transactions over gRPC:
-
 ```
-1. client calls TransactionService.Begin → receives transaction_id (UUID)
-2. client passes transaction_id in any write RPC → writes are not auto-committed
-3. client calls Commit or Rollback to finalise
+1. TransactionService.Begin → receives transaction_id (UUID)
+2. Pass transaction_id in any write RPC → writes are buffered, not auto-committed
+3. TransactionService.Commit or Rollback
 ```
 
-At most one transaction can be active at a time (BLiteEngine constraint).  
-Sessions that idle longer than `Transactions:TimeoutSeconds` (default 60 s) are rolled back automatically by a background cleanup service.
+At most one transaction per database at a time (enforced by `SemaphoreSlim(1,1)`).  
+Sessions idle longer than `Transactions:TimeoutSeconds` (default: 60 s) are rolled back automatically.
 
 ---
 
 ## Observability
 
-BLite Server ships with built-in OpenTelemetry support:
+Built-in OpenTelemetry support:
 
 - **Traces** — every gRPC RPC generates a span via `TelemetryInterceptor`
 - **Metrics** — `blite.server.rpc.total`, `blite.server.rpc.duration`, `blite.server.documents.streamed`, `blite.server.active_transactions`
 - **Exporters** — Console (dev) + OTLP/gRPC (Jaeger, Grafana, Datadog, …)
 
-Configure in `appsettings.json`:
-
 ```json
 "Telemetry": {
   "Enabled": true,
   "ServiceName": "blite-server",
-  "Console": null,
   "Otlp": { "Endpoint": "http://localhost:4317" }
 }
 ```
 
 ---
 
-## Implementation Roadmap
-
-| Step | Scope | Status |
-|---|---|---|
-| **1 – BLite.Proto** | `.proto` + `QueryDescriptor` + MessagePack serialization | ✅ Complete |
-| **2 – BLite.Server** | ASP.NET Core host, `DynamicService` + `DocumentService` end-to-end | ✅ Complete |
-| **3 – BLite.Client** | `RemoteQueryProvider`, `ExpressionToDescriptorVisitor`, `IBLiteQueryable<T>` | 🔄 In progress |
-| **4 – Typed path** | `TypeManifest` schema registration, typed query push-down | 🔜 Planned |
-| **5 – Auth & multi-tenancy** | API Key middleware, `AdminService`, tenant namespacing | ✅ Complete |
-| **6 – Observability** | OpenTelemetry traces + metrics, Console + OTLP exporters | ✅ Complete |
-| **7 – Transactions** | `TransactionService`, token-scoped sessions, TTL cleanup | ✅ Complete |
-
----
-
 ## Getting Started
 
 ```bash
-# Run the server (binds on all interfaces, port 2626)
 dotnet run --project src/BLite.Server
-
-# Or with a custom database path
-dotnet run --project src/BLite.Server -- --db /data/mydb.db
 ```
 
-The server listens on `https://*:2626` (HTTP/2 only).
+On first run, navigate to `https://localhost:2628/setup` to create the root admin user.
 
-```csharp
-// Client usage (BLite.Client SDK — coming soon)
-var client = new BLiteRemoteClient("https://myhost:2626", apiKey: "your-key");
-var users  = client.GetCollection<User>("users");
-
-var result = await users.AsQueryable()
-    .Where(u => u.Age > 25)
-    .Select(u => new { u.Name, u.Age })
-    .ToListAsync();
-
-// Explicit transaction
-var txn = await client.BeginTransactionAsync();
-await users.InsertAsync(new User { Name = "Alice" }, txn);
-await orders.InsertAsync(new Order { UserId = alice.Id }, txn);
-await txn.CommitAsync();
-```
+| Service | URL |
+|---|---|
+| gRPC | `https://localhost:2626` |
+| REST API | `https://localhost:2627/api/v1` |
+| OpenAPI (Scalar) | `https://localhost:2627/scalar` |
+| Studio | `https://localhost:2628` |
 
 ---
 
@@ -221,9 +386,9 @@ await txn.CommitAsync();
 Licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)**.  
 See [LICENSE](LICENSE) for the full text.
 
-> The AGPL-3.0 requires that any modified version of this software that is
-> made available over a network must also make its source code available.
-> If you need a commercial license without this restriction, please contact the authors.
+> The AGPL-3.0 requires that any modified version of this software made available over
+> a network also makes its source code available.  
+> For a commercial license without this restriction, please contact the authors.
 
 ---
 

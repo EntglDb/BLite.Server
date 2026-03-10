@@ -109,7 +109,7 @@ internal static class RestApiCollectionsExtensions
 
         // DELETE /api/v1/{dbId}/collections/{collection}
         group.MapDelete("/{dbId}/collections/{collection}",
-            (HttpContext ctx,
+            async (HttpContext ctx,
              EngineRegistry registry,
              QueryCacheService cache,
              string dbId,
@@ -123,8 +123,11 @@ internal static class RestApiCollectionsExtensions
                 {
                     var engine = registry.GetEngine(realDb);
                     var dropped = engine.DropCollection(physical);
-                    if (dropped && cache.Enabled)
-                        cache.Invalidate(realDb, physical);
+                    if (dropped)
+                    {
+                        await engine.CommitAsync(ctx.RequestAborted);
+                        if (cache.Enabled) cache.Invalidate(realDb, physical);
+                    }
                     return dropped
                         ? Results.NoContent()
                         : Results.Problem(
@@ -353,6 +356,40 @@ internal static class RestApiCollectionsExtensions
             .AddEndpointFilter(new PermissionFilter(BLiteOperation.Admin, checkDb: true))
             .WithSummary("Configure TimeSeries")
             .WithDescription("Configures the collection as a TimeSeries with a TTL field and retention policy. This operation is irreversible.");
+
+        // POST /api/v1/{dbId}/{collection}/timeseries/prune
+        group.MapPost("/{dbId}/{collection}/timeseries/prune",
+            (HttpContext ctx,
+             EngineRegistry registry,
+             string dbId,
+             string collection) =>
+            {
+                var user = (BLiteUser)ctx.Items[nameof(BLiteUser)]!;
+                try
+                {
+                    var physical = NamespaceResolver.Resolve(user, collection);
+                    var engine = registry.GetEngine(RestApiExtensions.NullIfDefault(dbId));
+                    var col = engine.GetOrCreateCollection(physical);
+                    if (!col.IsTimeSeries)
+                        return Results.Problem(
+                            title: "Bad Request",
+                            detail: "ForcePrune is only valid on TimeSeries collections.",
+                            statusCode: StatusCodes.Status400BadRequest);
+                    col.ForcePrune();
+                    engine.Commit();
+                    return Results.NoContent();
+                }
+                catch (InvalidOperationException ex)
+                {
+                    return Results.Problem(
+                        title: "Not Found",
+                        detail: ex.Message,
+                        statusCode: StatusCodes.Status404NotFound);
+                }
+            })
+            .AddEndpointFilter(new PermissionFilter(BLiteOperation.Admin, checkDb: true))
+            .WithSummary("Force prune TimeSeries")
+            .WithDescription("Immediately prunes all expired documents from a TimeSeries collection, regardless of insert counters. Requires Admin permission.");
 
         // GET /api/v1/{dbId}/{collection}/schema
         group.MapGet("/{dbId}/{collection}/schema",

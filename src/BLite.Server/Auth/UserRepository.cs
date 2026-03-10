@@ -70,8 +70,8 @@ public sealed class UserRepository
     public BLiteUser? FindByKey(string apiKey)
     {
         var hash = HashKey(apiKey);
-        _byKey.TryGetValue(hash, out var user);
-        return user;
+        if (!_byKey.TryGetValue(hash, out var user)) return null;
+        return user.Active ? user : null;
     }
 
     // ── CRUD ──────────────────────────────────────────────────────────────────
@@ -109,9 +109,11 @@ public sealed class UserRepository
 
         if (ok)
         {
-            // Invalidate cache
+            // Mark as inactive in the cache so ListAll() still returns the user
+            // with Active=false, while FindByKey() blocks further authentication.
             var oldUser = _byKey.Values.FirstOrDefault(u => u.Username.Equals(username, StringComparison.OrdinalIgnoreCase));
-            if (oldUser is not null) _byKey.TryRemove(oldUser.ApiKeyHash, out _);
+            if (oldUser is not null)
+                _byKey[oldUser.ApiKeyHash] = oldUser with { Active = false };
         }
 
         return ok;

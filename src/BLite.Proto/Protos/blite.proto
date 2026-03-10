@@ -46,6 +46,7 @@ service DynamicService {
   // TimeSeries configuration (irreversible — call once per collection)
   rpc ConfigureTimeSeries (ConfigureTimeSeriesRequest) returns (MutationResponse);
   rpc GetTimeSeriesInfo   (CollectionRequest)          returns (TimeSeriesInfoResponse);
+  rpc ForcePrune          (CollectionRequest)          returns (MutationResponse);
 
   // Schema management
   rpc GetSchema (CollectionRequest)  returns (CollectionSchemaResponse);
@@ -460,4 +461,94 @@ message BeginTransactionResponse {
 
 message TransactionRequest {
   string transaction_id = 1;
+}
+
+// ─── KvService ────────────────────────────────────────────────────────────────
+// Persistent, page-backed Key-Value store embedded in the same database file.
+// Keys are UTF-8 strings (≤ 255 bytes); values are arbitrary byte payloads.
+// The caller's database is resolved from the API key (user.DatabaseId).
+// Keys are transparently namespaced for multi-tenant isolation.
+
+service KvService {
+  // Read operations — require Query permission
+  rpc Get      (KvGetRequest)     returns (KvGetResponse);
+  rpc Exists   (KvKeyRequest)     returns (KvExistsResponse);
+  rpc ScanKeys (KvScanRequest)    returns (KvScanResponse);
+
+  // Write operations — require Write permission
+  rpc Set      (KvSetRequest)     returns (MutationResponse);
+  rpc Delete   (KvDeleteRequest)  returns (MutationResponse);
+  rpc Refresh  (KvRefreshRequest) returns (MutationResponse);
+  rpc Batch    (KvBatchRequest)   returns (KvBatchResponse);
+
+  // Maintenance — requires Admin permission
+  rpc PurgeExpired (KvDbRequest)  returns (KvPurgeResponse);
+}
+
+// ─── KvService messages ───────────────────────────────────────────────────────
+
+message KvDbRequest {}  // database resolved from caller's API key
+
+message KvGetRequest {
+  string key = 1;
+}
+
+message KvGetResponse {
+  bytes  value = 1;  // raw payload; empty when not found
+  bool   found = 2;
+  string error = 3;
+}
+
+message KvSetRequest {
+  string key    = 1;
+  bytes  value  = 2;
+  int64  ttl_ms = 3;  // 0 = no expiry
+}
+
+message KvDeleteRequest {
+  string key = 1;
+}
+
+message KvKeyRequest {
+  string key = 1;
+}
+
+message KvExistsResponse {
+  bool   exists = 1;
+  string error  = 2;
+}
+
+message KvRefreshRequest {
+  string key    = 1;
+  int64  ttl_ms = 2;  // must be > 0
+}
+
+message KvScanRequest {
+  string prefix = 1;  // empty = return all keys visible to the caller
+}
+
+message KvScanResponse {
+  repeated string keys  = 1;
+  string          error = 2;
+}
+
+message KvPurgeResponse {
+  int32  purged_count = 1;
+  string error        = 2;
+}
+
+message KvBatchOp {
+  string key       = 1;
+  bytes  value     = 2;  // ignored when is_delete = true
+  int64  ttl_ms    = 3;  // 0 = use store default
+  bool   is_delete = 4;
+}
+
+message KvBatchRequest {
+  repeated KvBatchOp operations = 1;
+}
+
+message KvBatchResponse {
+  int32  affected_count = 1;
+  string error          = 2;
 }

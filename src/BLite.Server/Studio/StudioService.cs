@@ -487,7 +487,7 @@ public sealed class StudioService
     /// <summary>
     /// Fetches a single document by ID and serialises it to indented JSON.
     /// </summary>
-    public async Task<string> GetDocumentAsJsonAsync(
+    public async Task<string?> GetDocumentAsJsonAsync(
         string? databaseId, string collection, BsonId id,
         CancellationToken ct = default)
     {
@@ -652,6 +652,48 @@ public sealed class StudioService
         var reverseMap = (ConcurrentDictionary<ushort, string>)engine.GetKeyReverseMap();
         var doc        = BsonJsonConverter.FromJson(json, keyMap, reverseMap);
         return await engine.UpdateAsync(collection, id, doc, ct);
+    }
+
+    // ── Key-Value store ───────────────────────────────────────────────────────
+
+    /// <summary>Returns all keys (optionally filtered by prefix) in sorted order.</summary>
+    public IReadOnlyList<string> KvScanKeys(string? databaseId, string prefix = "")
+    {
+        var engine = _registry.GetEngine(databaseId);
+        return engine.KvStore.ScanKeys(prefix).OrderBy(k => k).ToList();
+    }
+
+    /// <summary>Returns the raw value bytes for <paramref name="key"/>, or <c>null</c> when absent/expired.</summary>
+    public byte[]? KvGet(string? databaseId, string key)
+        => _registry.GetEngine(databaseId).KvStore.Get(key);
+
+    /// <summary>Stores a value and persists the change.</summary>
+    public async Task KvSetAsync(string? databaseId, string key, byte[] value,
+        TimeSpan? ttl = null, CancellationToken ct = default)
+    {
+        var engine = _registry.GetEngine(databaseId);
+        engine.KvStore.Set(key, value, ttl);
+        await engine.CommitAsync(ct);
+    }
+
+    /// <summary>Deletes a key and persists the change. Returns false if the key was absent.</summary>
+    public async Task<bool> KvDeleteAsync(string? databaseId, string key,
+        CancellationToken ct = default)
+    {
+        var engine = _registry.GetEngine(databaseId);
+        var ok = engine.KvStore.Delete(key);
+        if (ok) await engine.CommitAsync(ct);
+        return ok;
+    }
+
+    /// <summary>Purges all expired entries and persists the change.</summary>
+    public async Task<int> KvPurgeExpiredAsync(string? databaseId,
+        CancellationToken ct = default)
+    {
+        var engine = _registry.GetEngine(databaseId);
+        var count = engine.KvStore.PurgeExpired();
+        await engine.CommitAsync(ct);
+        return count;
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────────

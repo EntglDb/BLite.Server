@@ -110,14 +110,15 @@ public class AdminTests : IntegrationTestBase
             username, null,
             [new UserPermission { Collection = "*", Ops = (int)BLiteOperation.All }]);
 
+        // Build the document while the user still has Insert — RegisterAsync requires it
+        await using var userClient = CreateClient(key);
+        var col = userClient.GetDynamicCollection(colName);
+        var doc = await col.NewDocumentAsync(["x"], b => b.AddInt32("x", 1));
+
         // Downgrade to read-only
         await admin.Admin.UpdatePermissionsAsync(
             username,
             [new UserPermission { Collection = "*", Ops = (int)BLiteOperation.Query }]);
-
-        await using var userClient = CreateClient(key);
-        var col = userClient.GetDynamicCollection(colName);
-        var doc = await col.NewDocumentAsync(["x"], b => b.AddInt32("x", 1));
 
         await Assert.ThrowsAsync<Grpc.Core.RpcException>(() => col.InsertAsync(doc));
     }

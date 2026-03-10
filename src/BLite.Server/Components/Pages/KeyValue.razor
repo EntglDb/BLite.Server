@@ -1,0 +1,268 @@
+@page "/kv"
+@page "/kv/{DatabaseId}"
+@inject StudioService Studio
+
+<h1>🗝️ Key-Value Store</h1>
+
+<div class="toolbar" style="margin-bottom:12px">
+    <label class="toolbar-label">Database:</label>
+    <select class="input" @onchange="OnDatabaseChanged">
+        <option value="">(default / system)</option>
+        @foreach (var t in _tenants)
+        {
+            <option value="@t.DatabaseId" selected="@(t.DatabaseId == DatabaseId)">@t.DatabaseId</option>
+        }
+    </select>
+    <input @bind="_prefix" placeholder="Prefix filter…" class="input" style="max-width:200px" />
+    <button class="btn" @onclick="Refresh">🔍 Scan</button>
+    <button class="btn" @onclick="PurgeExpired" title="Remove all expired entries">🗑️ Purge expired</button>
+    <button class="btn btn-primary" @onclick="NewEntry">+ New entry</button>
+</div>
+
+@if (!string.IsNullOrEmpty(_message))
+{
+    <div class="alert @(_isError ? "alert-error" : "alert-ok")" style="margin-bottom:12px">@_message</div>
+}
+
+<div class="doc-browser">
+
+    @* ── Key list ──────────────────────────────────────────────────────────── *@
+    <div class="doc-table-pane">
+        <div class="table-scroll">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Key</th>
+                        <th style="width:90px">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var key in _keys)
+                    {
+                        var k = key;
+                        <tr class="@(_editKey == k ? "row-selected" : "")"
+                            style="cursor:pointer"
+                            @onclick="() => OpenKey(k)">
+                            <td class="mono">@k</td>
+                            <td @onclick:stopPropagation>
+                                <button class="btn btn-small btn-danger"
+                                        @onclick="() => DeleteKey(k)">Delete</button>
+                            </td>
+                        </tr>
+                    }
+                    @if (_keys.Count == 0)
+                    {
+                        <tr><td colspan="2" class="empty">No keys found.</td></tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    @* ── Editor panel ──────────────────────────────────────────────────────── *@
+    @if (_editing)
+    {
+        <div class="doc-editor-pane">
+            <div class="doc-editor-header">
+                <span>@(_isNew ? "New entry" : _editKey)</span>
+                <button class="btn btn-small" @onclick="CloseEditor">✕</button>
+            </div>
+
+            <div style="padding:12px;display:flex;flex-direction:column;gap:12px">
+
+                @* Key *@
+                <div>
+                    <label style="display:block;margin-bottom:4px;font-size:0.85em;color:var(--text-dim)">Key</label>
+                    @if (_isNew)
+                    {
+                        <input @bind="_editKey" placeholder="my-key" class="input"
+                               style="width:100%;box-sizing:border-box" />
+                    }
+                    else
+                    {
+                        <div class="mono" style="word-break:break-all;font-size:0.9em">@_editKey</div>
+                    }
+                </div>
+
+                @* Value *@
+                <div>
+                    <label style="display:block;margin-bottom:4px;font-size:0.85em;color:var(--text-dim)">
+                        Value&nbsp;(UTF-8 text)
+                        @if (_isBinary)
+                        {
+                            <span class="badge badge-idle" style="margin-left:6px">binary → base64</span>
+                        }
+                    </label>
+                    <textarea @bind="_editValue" class="doc-json-textarea"
+                              placeholder="Value…" rows="8"></textarea>
+                </div>
+
+                @* TTL *@
+                <div>
+                    <label style="display:block;margin-bottom:4px;font-size:0.85em;color:var(--text-dim)">TTL (seconds, 0 = no expiry)</label>
+                    <input @bind="_editTtlSeconds" type="number" min="0" class="input"
+                           style="max-width:160px" />
+                </div>
+            </div>
+
+            <div class="doc-editor-footer">
+                <span class="doc-editor-msg @(_editorError ? "text-red" : "text-green")">@_editorMessage</span>
+                @if (!_isNew)
+                {
+                    <button class="btn btn-small btn-danger"
+                            @onclick="() => DeleteKey(_editKey)">Delete</button>
+                }
+                <button class="btn btn-small" @onclick="CloseEditor">Cancel</button>
+                <button class="btn btn-small btn-primary" @onclick="SaveEntry"
+                        disabled="@string.IsNullOrWhiteSpace(_editKey)">Save</button>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public string? DatabaseId { get; set; }
+
+    private IReadOnlyList<TenantEntry> _tenants = [];
+    private List<string>               _keys    = [];
+    private string _prefix  = "";
+    private string _message = "";
+    private bool   _isError;
+
+    // ── editor state ──────────────────────────────────────────────────────────
+    private bool   _editing;
+    private bool   _isNew;
+    private bool   _isBinary;
+    private string _editKey        = "";
+    private string _editValue      = "";
+    private int    _editTtlSeconds;
+    private string _editorMessage  = "";
+    private bool   _editorError;
+
+    protected override void OnParametersSet() => Refresh();
+
+    private void Refresh()
+    {
+        _tenants = Studio.ListTenants();
+        try
+        {
+            _keys   = [.. Studio.KvScanKeys(DatabaseId, _prefix)];
+            _isError = false;
+            _message = _keys.Count == 0 ? "" : $"{_keys.Count} key(s).";
+        }
+        catch (Exception ex)
+        {
+            _keys    = [];
+            _message = ex.Message;
+            _isError = true;
+        }
+    }
+
+    private void OnDatabaseChanged(ChangeEventArgs e)
+    {
+        DatabaseId = string.IsNullOrEmpty(e.Value?.ToString()) ? null : e.Value.ToString();
+        Refresh();
+    }
+
+    private void OpenKey(string key)
+    {
+        _editKey       = key;
+        _isNew         = false;
+        _isBinary      = false;
+        _editorMessage = "";
+        _editorError   = false;
+        _editTtlSeconds = 0;
+
+        var bytes = Studio.KvGet(DatabaseId, key);
+        if (bytes is null)
+        {
+            _editValue = "";
+        }
+        else
+        {
+            try
+            {
+                _editValue = System.Text.Encoding.UTF8.GetString(bytes);
+            }
+            catch
+            {
+                _editValue = Convert.ToBase64String(bytes);
+                _isBinary  = true;
+            }
+        }
+        _editing = true;
+    }
+
+    private void NewEntry()
+    {
+        _editKey        = "";
+        _editValue      = "";
+        _editTtlSeconds = 0;
+        _isNew          = true;
+        _isBinary       = false;
+        _editorMessage  = "";
+        _editorError    = false;
+        _editing        = true;
+    }
+
+    private async Task SaveEntry()
+    {
+        if (string.IsNullOrWhiteSpace(_editKey)) return;
+        try
+        {
+            var bytes = System.Text.Encoding.UTF8.GetBytes(_editValue);
+            var ttl   = _editTtlSeconds > 0 ? TimeSpan.FromSeconds(_editTtlSeconds) : (TimeSpan?)null;
+            await Studio.KvSetAsync(DatabaseId, _editKey, bytes, ttl);
+            _editorMessage = "Saved.";
+            _editorError   = false;
+            _isNew         = false;
+            _isBinary      = false;
+            Refresh();
+        }
+        catch (Exception ex)
+        {
+            _editorMessage = ex.Message;
+            _editorError   = true;
+        }
+    }
+
+    private async Task DeleteKey(string key)
+    {
+        try
+        {
+            await Studio.KvDeleteAsync(DatabaseId, key);
+            if (_editKey == key) CloseEditor();
+            Refresh();
+            _message = $"Deleted '{key}'.";
+            _isError = false;
+        }
+        catch (Exception ex)
+        {
+            _message = ex.Message;
+            _isError = true;
+        }
+    }
+
+    private async Task PurgeExpired()
+    {
+        try
+        {
+            var count = await Studio.KvPurgeExpiredAsync(DatabaseId);
+            _message = $"Purged {count} expired entr{(count == 1 ? "y" : "ies")}.";
+            _isError = false;
+            Refresh();
+        }
+        catch (Exception ex)
+        {
+            _message = ex.Message;
+            _isError = true;
+        }
+    }
+
+    private void CloseEditor()
+    {
+        _editing       = false;
+        _editKey       = "";
+        _editorMessage = "";
+    }
+}

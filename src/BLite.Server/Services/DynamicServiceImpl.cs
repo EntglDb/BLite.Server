@@ -470,6 +470,7 @@ public sealed class DynamicServiceImpl : DynamicService.DynamicServiceBase
                 Name       = d.Name,
                 Field      = d.FieldPath,
                 Type       = d.Type.ToString(),
+                Unique     = d.IsUnique,
                 Dimensions = d.Dimensions,
                 Metric     = d.Metric.ToString()
             }));
@@ -669,6 +670,28 @@ public sealed class DynamicServiceImpl : DynamicService.DynamicServiceBase
         }
     }
 
+    public override Task<MutationResponse> ForcePrune(
+        CollectionRequest request, ServerCallContext context)
+    {
+        var (col, user) = AuthorizeWithUser(context, request.Collection, BLiteOperation.Admin);
+        var engine = _registry.GetEngine(user.DatabaseId);
+        try
+        {
+            var collection = engine.GetOrCreateCollection(col);
+            if (!collection.IsTimeSeries)
+                return Task.FromResult(new MutationResponse { Success = false, Error = "ForcePrune is only valid on TimeSeries collections." });
+            collection.ForcePrune();
+            engine.Commit();
+            return Task.FromResult(new MutationResponse { Success = true });
+        }
+        catch (RpcException) { throw; }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "ForcePrune failed on collection {Col}", col);
+            return Task.FromResult(new MutationResponse { Success = false, Error = ex.Message });
+        }
+    }
+
     // -- Collection management -------------------------------------------------
 
     public override Task<CollectionListResponse> ListCollections(
@@ -690,13 +713,14 @@ public sealed class DynamicServiceImpl : DynamicService.DynamicServiceBase
         return Task.FromResult(response);
     }
 
-    public override Task<MutationResponse> DropCollection(
+    public override async Task<MutationResponse> DropCollection(
         DropCollectionRequest request, ServerCallContext context)
     {
         var (col, user) = AuthorizeWithUser(context, request.Collection, BLiteOperation.Drop);
         var engine      = _registry.GetEngine(user.DatabaseId);
         var ok          = engine.DropCollection(col);
-        return Task.FromResult(new MutationResponse { Success = ok });
+        if (ok) await engine.CommitAsync(context.CancellationToken);
+        return new MutationResponse { Success = ok };
     }
 
     // -- Auth helpers ----------------------------------------------------------

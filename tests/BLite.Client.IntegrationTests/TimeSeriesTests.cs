@@ -88,4 +88,22 @@ public class TimeSeriesTests : IntegrationTestBase
         var info = await col.GetTimeSeriesInfoAsync();
         Assert.Equal("event_time", info.TtlFieldName);
     }
+
+    [Fact]
+    public async Task ForcePruneAsync_OnTimeSeriesCollection_CompletesWithoutError()
+    {
+        await using var client = CreateClient();
+        var col = client.GetDynamicCollection(UniqueCollection());
+
+        await col.ConfigureTimeSeriesAsync("ts", TimeSpan.FromDays(1));
+
+        // Insert a document so the collection is non-empty
+        var doc = await col.NewDocumentAsync(
+            ["ts", "value"],
+            b => b.AddDateTime("ts", DateTime.UtcNow).AddInt32("value", 42));
+        await col.InsertAsync(doc);
+
+        // Should not throw regardless of how many documents are pruned
+        await col.ForcePruneAsync();
+    }
 }

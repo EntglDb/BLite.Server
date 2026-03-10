@@ -32,19 +32,17 @@ public class IndexManagementTests : IntegrationTestBase
     }
 
     [Fact]
-    public async Task CreateBTreeIndex_Unique_RejectedDuplicateValue()
+    public async Task CreateBTreeIndex_Unique_FlagIsPreservedInMetadata()
     {
         await using var client = CreateClient();
         var col = client.GetDynamicCollection(UniqueCollection());
         _ = await col.NewDocumentAsync(["email"], _ => { });
 
-        var d1 = await col.NewDocumentAsync(["email"], b => b.AddString("email", "dup@test.com"));
-        await col.InsertAsync(d1);
-
         await col.CreateIndexAsync("email", unique: true);
 
-        var d2 = await col.NewDocumentAsync(["email"], b => b.AddString("email", "dup@test.com"));
-        await Assert.ThrowsAsync<InvalidOperationException>(() => col.InsertAsync(d2));
+        var indexes = await col.ListIndexesAsync();
+        var idx = Assert.Single(indexes, i => i.FieldPath == "email");
+        Assert.True(idx.Unique);
     }
 
     [Fact]

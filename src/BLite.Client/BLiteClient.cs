@@ -5,6 +5,7 @@ using BLite.Bson;
 using BLite.Client.Admin;
 using BLite.Client.Collections;
 using BLite.Client.Internal;
+using BLite.Client.Kv;
 using BLite.Client.Transactions;
 using BLite.Core.Collections;
 using BLite.Proto.V1;
@@ -45,6 +46,7 @@ public sealed class BLiteClient : IAsyncDisposable
     private readonly DocumentService.DocumentServiceClient  _docStub;
     private readonly AdminService.AdminServiceClient        _adminStub;
     private readonly TransactionService.TransactionServiceClient _txnStub;
+    private readonly KvService.KvServiceClient              _kvStub;
 
     private bool _disposed;
     private readonly bool _ownsChannel;
@@ -68,6 +70,7 @@ public sealed class BLiteClient : IAsyncDisposable
         _docStub   = new DocumentService.DocumentServiceClient(_channel);
         _adminStub = new AdminService.AdminServiceClient(_channel);
         _txnStub   = new TransactionService.TransactionServiceClient(_channel);
+        _kvStub    = new KvService.KvServiceClient(_channel);
 
         var metaStub = new MetadataService.MetadataServiceClient(_channel);
         _keyMap = new ClientKeyMap(metaStub, _headers);
@@ -91,6 +94,7 @@ public sealed class BLiteClient : IAsyncDisposable
         _docStub   = new DocumentService.DocumentServiceClient(_channel);
         _adminStub = new AdminService.AdminServiceClient(_channel);
         _txnStub   = new TransactionService.TransactionServiceClient(_channel);
+        _kvStub    = new KvService.KvServiceClient(_channel);
 
         var metaStub = new MetadataService.MetadataServiceClient(_channel);
         _keyMap = new ClientKeyMap(metaStub, _headers);
@@ -185,6 +189,22 @@ public sealed class BLiteClient : IAsyncDisposable
         {
             ThrowIfDisposed();
             return new RemoteAdminClient(_adminStub, _headers);
+        }
+    }
+
+    // ── Key-Value store ───────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Access to the Key-Value store attached to this client's database.
+    /// Supports get, set, delete, TTL refresh, key scanning, batch writes,
+    /// and purging expired entries.
+    /// </summary>
+    public RemoteKvStore Kv
+    {
+        get
+        {
+            ThrowIfDisposed();
+            return new RemoteKvStore(_kvStub, _headers);
         }
     }
 
