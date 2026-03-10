@@ -45,6 +45,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- OS service integration (Windows Service + Linux systemd) -->
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.*" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.Systemd" Version="10.0.*" />
+
     <!-- gRPC host -->
     <PackageReference Include="ErrorOr" Version="2.1.0" />
     <PackageReference Include="Grpc.AspNetCore" Version="2.76.0" />
