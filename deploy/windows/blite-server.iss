@@ -44,7 +44,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-Name: "startservice"; Description: "Start BLite Server service after installation"; GroupDescription: "Service:"; Flags: checked
+Name: "startservice"; Description: "Start BLite Server service after installation"; GroupDescription: "Service:"
 
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -237,7 +237,7 @@ begin
       '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 
     { 4. Optionally start the service }
-    if IsTaskSelected('startservice') then
+    if WizardIsTaskSelected('startservice') then
       Exec(ExpandConstant('{sys}\sc.exe'),
         'start ' + '{#ServiceName}',
         '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
