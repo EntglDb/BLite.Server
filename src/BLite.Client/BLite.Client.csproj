@@ -28,11 +28,15 @@
   <ItemGroup>    <!-- BLite engine — direct project reference (local workspace) -->
     <!-- gRPC proto definitions + QueryDescriptor -->
     <ProjectReference Include="..\..\..\BLite.Server\src\BLite.Proto\BLite.Proto.csproj" />
+    <!-- Remote context source generator -->
+    <ProjectReference Include="..\BLite.Client.SourceGenerators\BLite.Client.SourceGenerators.csproj"
+                      OutputItemType="Analyzer"
+                      ReferenceOutputAssembly="false" />
   </ItemGroup>
 
   <ItemGroup>
     <!-- gRPC client channel -->
-    <PackageReference Include="BLite" Version="3.4.2" />
+    <PackageReference Include="BLite" Version="3.5.1" />
     <PackageReference Include="Grpc.Net.Client" Version="2.76.0" />
     <!-- QueryDescriptor wire serialization (same options as server) -->
     <PackageReference Include="MessagePack" Version="3.1.*" />
