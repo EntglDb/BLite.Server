@@ -2,6 +2,9 @@
   <Folder Name="/Elementi di soluzione/">
     <File Path="AGENTS.md" />
   </Folder>
+  <Folder Name="/samples/">
+    <Project Path="samples/BLite.Sample/BLite.Sample.csproj" />
+  </Folder>
   <Folder Name="/src/">
     <Project Path="src/BLite.Client/BLite.Client.csproj" />
     <Project Path="src/BLite.Proto/BLite.Proto.csproj" />
