@@ -30,9 +30,18 @@ builder.Host.UseWindowsService();
 builder.Host.UseSystemd();
 
 // ── Configuration ─────────────────────────────────────────────────────────────
+// When running as a Windows Service the working directory is C:\Windows\System32.
+// Always resolve relative paths against the executable's directory so that the
+// database and tenant files end up next to the binary regardless of how the
+// process was started.
+static string ResolveAppPath(string path) =>
+    Path.IsPathRooted(path)
+        ? path
+        : Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, path));
+
 var serverConfig = builder.Configuration.GetSection("BLiteServer");
-var dbPath = serverConfig.GetValue<string>("DatabasePath") ?? "blite.db";
-var databasesDir = serverConfig.GetValue<string>("DatabasesDirectory") ?? "data/tenants";
+var dbPath       = ResolveAppPath(serverConfig.GetValue<string>("DatabasePath")       ?? "blite.db");
+var databasesDir = ResolveAppPath(serverConfig.GetValue<string>("DatabasesDirectory") ?? "data/tenants");
 var pageSizeBytes = serverConfig.GetValue<int>("MaxPageSizeBytes");
 if (pageSizeBytes <= 0) pageSizeBytes = 16384;
 var pageConfig = new PageFileConfig

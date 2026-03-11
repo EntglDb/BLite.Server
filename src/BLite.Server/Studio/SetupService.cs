@@ -20,9 +20,11 @@ public sealed class SetupService
 
     public SetupService(IConfiguration config)
     {
-        var dbPath  = config.GetValue<string>("BLiteServer:DatabasePath") ?? "blite.db";
-        var dir     = Path.GetDirectoryName(Path.GetFullPath(dbPath))
-                      ?? Directory.GetCurrentDirectory();
+        var raw    = config.GetValue<string>("BLiteServer:DatabasePath") ?? "blite.db";
+        var dbPath = Path.IsPathRooted(raw)
+            ? raw
+            : Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, raw));
+        var dir     = Path.GetDirectoryName(dbPath) ?? AppContext.BaseDirectory;
         _markerPath = Path.Combine(dir, "server-setup.json");
     }
 

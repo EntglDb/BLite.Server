@@ -57,13 +57,16 @@ Name: "{group}\{cm:UninstallProgram,{#AppName}}"; Filename: "{uninstallexe}"
 
 [Code]
 var
-  ConfigPage:  TInputQueryWizardPage;
-  GrpcPort:    String;
-  RestPort:    String;
-  StudioPort:  String;
-  RootKey:     String;
-  SourceUrl:   String;
-  StudioCheck: TNewCheckBox;
+  ConfigPage:   TInputQueryWizardPage;
+  SslPage:      TInputQueryWizardPage;
+  GrpcPort:     String;
+  RestPort:     String;
+  StudioPort:   String;
+  RootKey:      String;
+  SourceUrl:    String;
+  CertPath:     String;
+  CertPassword: String;
+  StudioCheck:  TNewCheckBox;
 
 procedure InitializeWizard;
 var
@@ -103,6 +106,20 @@ begin
   StudioCheck.Top       := StudioLabel.Top;
   StudioCheck.Left      := StudioLabel.Left + StudioLabel.Width + 8;
   StudioCheck.Width     := 80;
+
+  { ── SSL / TLS page (optional) ──────────────────────────────────────────── }
+  SslPage := CreateInputQueryPage(
+    ConfigPage.ID,
+    'HTTPS / TLS Configuration (optional)',
+    'Provide a PFX certificate to enable HTTPS on all endpoints.',
+    'Leave the certificate path empty to keep plain HTTP (recommended behind a reverse proxy).' + #13#10 +
+    'When a certificate is provided, all Kestrel endpoints switch to https://.');
+
+  SslPage.Add('Certificate (.pfx) full path:', False);
+  SslPage.Add('Certificate password:', True);
+
+  SslPage.Values[0] := '';
+  SslPage.Values[1] := '';
 end;
 
 { Validate input before allowing Next }
@@ -144,6 +161,18 @@ begin
       Result := False; Exit;
     end;
   end;
+
+  if CurPageID = SslPage.ID then
+  begin
+    CertPath     := Trim(SslPage.Values[0]);
+    CertPassword := Trim(SslPage.Values[1]);
+
+    if (CertPath <> '') and not FileExists(CertPath) then
+    begin
+      MsgBox('Certificate file not found:' + #13#10 + CertPath, mbError, MB_OK);
+      Result := False; Exit;
+    end;
+  end;
 end;
 
 { Escape a string for embedding inside a JSON value }
@@ -167,13 +196,35 @@ end;
 { Write appsettings.Production.json after all files are copied }
 procedure WriteAppSettings;
 var
-  Path:    String;
-  Content: String;
-  Studio:  String;
+  FilePath:    String;
+  Content:     String;
+  Studio:      String;
+  Scheme:      String;
+  CertSection: String;
 begin
-  Path := ExpandConstant('{app}\appsettings.Production.json');
+  FilePath := ExpandConstant('{app}\appsettings.Production.json');
 
   if StudioCheck.Checked then Studio := 'true' else Studio := 'false';
+
+  { Switch between http and https based on whether a certificate was provided }
+  if CertPath <> '' then
+  begin
+    Scheme := 'https';
+    CertSection :=
+      '  "Kestrel": {' + #13#10 +
+      '    "Certificates": {' + #13#10 +
+      '      "Default": {' + #13#10 +
+      '        "Path": "' + JsonEscape(CertPath) + '",' + #13#10 +
+      '        "Password": "' + JsonEscape(CertPassword) + '"' + #13#10 +
+      '      }' + #13#10 +
+      '    },' + #13#10 +
+      '    "Endpoints": {';
+  end
+  else
+  begin
+    Scheme := 'http';
+    CertSection := '  "Kestrel": {' + #13#10 + '    "Endpoints": {';
+  end;
 
   Content :=
     '{' + #13#10 +
@@ -184,18 +235,17 @@ begin
     '    "DatabasePath": "data\\blite.db",' + #13#10 +
     '    "DatabasesDirectory": "data\\tenants"' + #13#10 +
     '  },' + #13#10 +
-    '  "Kestrel": {' + #13#10 +
-    '    "Endpoints": {' + #13#10 +
+    CertSection + #13#10 +
     '      "Grpc": {' + #13#10 +
-    '        "Url": "http://*:' + GrpcPort + '",' + #13#10 +
+    '        "Url": "' + Scheme + '://*:' + GrpcPort + '",' + #13#10 +
     '        "Protocols": "Http2"' + #13#10 +
     '      },' + #13#10 +
     '      "Rest": {' + #13#10 +
-    '        "Url": "http://*:' + RestPort + '",' + #13#10 +
+    '        "Url": "' + Scheme + '://*:' + RestPort + '",' + #13#10 +
     '        "Protocols": "Http1AndHttp2"' + #13#10 +
     '      },' + #13#10 +
     '      "Studio": {' + #13#10 +
-    '        "Url": "http://*:' + StudioPort + '",' + #13#10 +
+    '        "Url": "' + Scheme + '://*:' + StudioPort + '",' + #13#10 +
     '        "Protocols": "Http1AndHttp2"' + #13#10 +
     '      }' + #13#10 +
     '    }' + #13#10 +
@@ -208,7 +258,7 @@ begin
     '  }' + #13#10 +
     '}' + #13#10;
 
-  SaveStringToFile(Path, Content, False);
+  SaveStringToFile(FilePath, Content, False);
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);

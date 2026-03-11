@@ -5,6 +5,7 @@
 # Usage:
 #   sudo ./install.sh [--grpc-port N] [--rest-port N] [--studio-port N]
 #                     [--root-key KEY] [--source-url URL] [--data-dir DIR]
+#                     [--cert-path PATH] [--cert-password PASS]
 #                     [--no-studio] [--non-interactive]
 #
 # Without arguments the script runs interactively and prompts for each setting.
@@ -24,6 +25,8 @@ STUDIO_PORT=2628
 ROOT_KEY=""
 SOURCE_URL="https://github.com/EntglDb/BLite.Server"
 STUDIO_ENABLED="true"
+CERT_PATH=""
+CERT_PASSWORD=""
 NON_INTERACTIVE=false
 
 # ── Colour helpers ────────────────────────────────────────────────────────────
@@ -42,6 +45,8 @@ while [[ $# -gt 0 ]]; do
         --source-url)      SOURCE_URL="$2";   shift 2 ;;
         --data-dir)        DATA_DIR="$2";     shift 2 ;;
         --no-studio)       STUDIO_ENABLED="false"; shift ;;
+        --cert-path)       CERT_PATH="$2";         shift 2 ;;
+        --cert-password)   CERT_PASSWORD="$2";     shift 2 ;;
         --non-interactive) NON_INTERACTIVE=true;    shift ;;
         *) error "Unknown option: $1"; exit 1 ;;
     esac
@@ -103,6 +108,17 @@ prompt SOURCE_URL     "Source URL (AGPLv3 §13 compliance)" "$SOURCE_URL"
 prompt STUDIO_ENABLED "Enable Studio UI (true/false)"      "$STUDIO_ENABLED"
 prompt DATA_DIR       "Data directory"                     "$DATA_DIR"
 
+# Optional TLS certificate (leave empty to use plain HTTP)
+if ! $NON_INTERACTIVE && [[ -z "$CERT_PATH" ]]; then
+    read -rp "Certificate (.pfx/.pem) path [leave empty for plain HTTP]: " _cert_input
+    CERT_PATH="${_cert_input:-}"
+    if [[ -n "$CERT_PATH" ]]; then
+        read -rsp "Certificate password [leave empty if none]: " _pass_input
+        echo ""
+        CERT_PASSWORD="${_pass_input:-}"
+    fi
+fi
+
 echo ""
 info "Installing BLite Server with the following settings:"
 echo "  Install dir   : $INSTALL_DIR"
@@ -112,6 +128,11 @@ echo "  gRPC port     : $GRPC_PORT"
 echo "  REST port     : $REST_PORT"
 echo "  Studio port   : $STUDIO_PORT"
 echo "  Studio enabled: $STUDIO_ENABLED"
+if [[ -n "$CERT_PATH" ]]; then
+echo "  Certificate   : $CERT_PATH (HTTPS enabled)"
+else
+echo "  TLS           : disabled (plain HTTP)"
+fi
 echo "  Source URL    : $SOURCE_URL"
 echo ""
 
@@ -145,6 +166,19 @@ chmod 750 "$DATA_DIR"
 info "Writing configuration to $CONFIG_DIR..."
 mkdir -p "$CONFIG_DIR"
 
+# Determine protocol scheme and install certificate when provided
+if [[ -n "$CERT_PATH" ]]; then
+    _SCHEME="https"
+    _DEST_CERT="$CONFIG_DIR/server.pfx"
+    cp "$CERT_PATH" "$_DEST_CERT"
+    chown root:"$SERVICE_USER" "$_DEST_CERT"
+    chmod 640 "$_DEST_CERT"
+    info "Certificate installed at $_DEST_CERT"
+    CERT_PATH="$_DEST_CERT"
+else
+    _SCHEME="http"
+fi
+
 # Environment file read by the systemd unit (EnvironmentFile=-/etc/blite-server/environment)
 cat > "$CONFIG_DIR/environment" <<EOF
 # BLite Server — site configuration
@@ -155,11 +189,11 @@ cat > "$CONFIG_DIR/environment" <<EOF
 Auth__RootKey=${ROOT_KEY}
 
 # Kestrel endpoint URLs
-KESTREL__ENDPOINTS__GRPC__URL=http://*:${GRPC_PORT}
+KESTREL__ENDPOINTS__GRPC__URL=${_SCHEME}://*:${GRPC_PORT}
 KESTREL__ENDPOINTS__GRPC__PROTOCOLS=Http2
-KESTREL__ENDPOINTS__REST__URL=http://*:${REST_PORT}
+KESTREL__ENDPOINTS__REST__URL=${_SCHEME}://*:${REST_PORT}
 KESTREL__ENDPOINTS__REST__PROTOCOLS=Http1AndHttp2
-KESTREL__ENDPOINTS__STUDIO__URL=http://*:${STUDIO_PORT}
+KESTREL__ENDPOINTS__STUDIO__URL=${_SCHEME}://*:${STUDIO_PORT}
 KESTREL__ENDPOINTS__STUDIO__PROTOCOLS=Http1AndHttp2
 
 # Data paths
@@ -174,6 +208,16 @@ LICENSE__SOURCEURL=${SOURCE_URL}
 
 ASPNETCORE_ENVIRONMENT=Production
 EOF
+
+# Append TLS certificate settings when HTTPS is enabled
+if [[ -n "$CERT_PATH" ]]; then
+    cat >> "$CONFIG_DIR/environment" <<EOFSSL
+
+# TLS certificate
+KESTREL__CERTIFICATES__DEFAULT__PATH=${CERT_PATH}
+KESTREL__CERTIFICATES__DEFAULT__PASSWORD=${CERT_PASSWORD}
+EOFSSL
+fi
 
 chmod 640 "$CONFIG_DIR/environment"
 chown root:"$SERVICE_USER" "$CONFIG_DIR/environment"
@@ -224,10 +268,10 @@ echo -e "${GREEN}╔════════════════════
 echo -e "${GREEN}║  BLite Server installed and running successfully ║${NC}"
 echo -e "${GREEN}╚══════════════════════════════════════════════════╝${NC}"
 echo ""
-echo "  gRPC  → http://localhost:${GRPC_PORT}"
-echo "  REST  → http://localhost:${REST_PORT}"
+echo "  gRPC   → ${_SCHEME}://localhost:${GRPC_PORT}"
+echo "  REST   → ${_SCHEME}://localhost:${REST_PORT}"
 if [[ "$STUDIO_ENABLED" == "true" ]]; then
-echo "  Studio → http://localhost:${STUDIO_PORT}"
+echo "  Studio → ${_SCHEME}://localhost:${STUDIO_PORT}"
 fi
 echo ""
 echo "  Service status : systemctl status blite-server"
