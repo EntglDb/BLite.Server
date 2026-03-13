@@ -48,6 +48,11 @@ ENV KESTREL__ENDPOINTS__REST__PROTOCOLS=Http1AndHttp2
 ENV KESTREL__ENDPOINTS__STUDIO__URL=http://*:2628
 ENV KESTREL__ENDPOINTS__STUDIO__PROTOCOLS=Http1AndHttp2
 ENV STUDIO__ENABLED=false
+# When Studio is accessed via a reverse proxy (e.g. Plesk / nginx), set this to
+# the public hostname so RequireHost() matches the proxied Host header.
+# Example: -e STUDIO__HOST=studio.example.com
+# Leave unset for direct port access (http://server:2628).
+ENV STUDIO__HOST=
 
 # Data paths — mount a volume at /data to persist the database
 ENV BLITESERVER__DATABASEPATH=/data/blite.db

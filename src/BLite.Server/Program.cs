@@ -16,6 +16,7 @@ using BLite.Server.Studio;
 using BLite.Server.Telemetry;
 using BLite.Server.Transactions;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.OpenApi;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
@@ -227,6 +228,12 @@ static string? HostFilter(string? url)
 
 var restHostFilter   = HostFilter(app.Configuration["Kestrel:Endpoints:Rest:Url"]);
 var studioHostFilter = HostFilter(app.Configuration["Kestrel:Endpoints:Studio:Url"]);
+// If Studio is accessed via a reverse proxy, the Host header will be the proxy
+// domain (e.g. studio.example.com) rather than *:2628.  Studio:Host overrides
+// the port-based filter so RequireHost() matches the proxied hostname instead.
+var studioHostOverride = app.Configuration.GetValue<string>("Studio:Host");
+if (!string.IsNullOrWhiteSpace(studioHostOverride))
+    studioHostFilter = studioHostOverride;
 // Apply filters only when the two endpoints have actually different ports.
 bool portsAreSeparate = restHostFilter is not null
                      && studioHostFilter is not null
@@ -262,6 +269,15 @@ else
 
 if (app.Environment.IsDevelopment())
     app.MapGrpcReflectionService();
+
+// Forward headers from reverse proxy (X-Forwarded-For, X-Forwarded-Proto, X-Forwarded-Host).
+// Required for correct host matching (RequireHost) and HTTPS detection when behind nginx/Plesk.
+app.UseForwardedHeaders(new ForwardedHeadersOptions
+{
+    ForwardedHeaders = ForwardedHeaders.XForwardedFor
+                     | ForwardedHeaders.XForwardedProto
+                     | ForwardedHeaders.XForwardedHost
+});
 
 // Static files — must precede endpoint mapping (only needed for Studio CSS/JS)
 if (studioEnabled)
