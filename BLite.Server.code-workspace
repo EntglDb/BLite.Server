@@ -5,6 +5,9 @@
 		},
 		{
 			"path": "../BLite"
+		},
+		{
+			"path": "../BLite.Website"
 		}
 	],
 	"settings": {}

@@ -1,0 +1,596 @@
+syntax = "proto3";
+
+package blite.v1;
+
+option csharp_namespace = "BLite.Proto.V1";
+
+// ─── DynamicService ───────────────────────────────────────────────────────────
+// Schema-less path: all documents travel as raw BSON bytes.
+// Use this service when compile-time types are unavailable (scripting, migrations,
+// server-side processing, cross-language clients).
+
+service DynamicService {
+  // Single-document writes
+  rpc Insert      (InsertRequest)       returns (InsertResponse);
+  rpc Update      (UpdateRequest)       returns (MutationResponse);
+  rpc Delete      (DeleteRequest)       returns (MutationResponse);
+
+  // Single-document read
+  rpc FindById    (FindByIdRequest)     returns (DocumentResponse);
+
+  // Streaming query — server streams matching documents back one by one.
+  // query_descriptor carries the QueryDescriptor (MessagePack-encoded).
+  rpc Query       (QueryRequest)        returns (stream DocumentResponse);
+
+  // Vector similarity search — returns the k nearest neighbours.
+  rpc VectorSearch (VectorSearchRequest) returns (stream DocumentResponse);
+
+  // Bulk operations (single WAL transaction per call)
+  rpc InsertBulk  (BulkInsertRequest)   returns (BulkInsertResponse);
+  rpc UpdateBulk  (BulkUpdateRequest)   returns (BulkMutationResponse);
+  rpc DeleteBulk  (BulkDeleteRequest)   returns (BulkMutationResponse);
+
+  // Collection management
+  rpc ListCollections  (Empty)                    returns (CollectionListResponse);
+  rpc DropCollection   (DropCollectionRequest)    returns (MutationResponse);
+
+  // Index management
+  rpc CreateIndex     (CreateIndexRequest)    returns (MutationResponse);
+  rpc DropIndex       (DropIndexRequest)      returns (MutationResponse);
+  rpc ListIndexes     (CollectionRequest)     returns (ListIndexesResponse);
+  rpc QueryIndex      (QueryIndexRequest)     returns (stream DocumentResponse);
+
+  // VectorSource (embedding source field configuration)
+  rpc SetVectorSource (SetVectorSourceRequest)  returns (MutationResponse);
+  rpc GetVectorSource (CollectionRequest)        returns (GetVectorSourceResponse);
+
+  // TimeSeries configuration (irreversible — call once per collection)
+  rpc ConfigureTimeSeries (ConfigureTimeSeriesRequest) returns (MutationResponse);
+  rpc GetTimeSeriesInfo   (CollectionRequest)          returns (TimeSeriesInfoResponse);
+  rpc ForcePrune          (CollectionRequest)          returns (MutationResponse);
+
+  // Change Data Capture — server streams change events for this collection
+  rpc Watch (WatchRequest) returns (stream ChangeEventResponse);
+
+  // Schema management
+  rpc GetSchema (CollectionRequest)  returns (CollectionSchemaResponse);
+  rpc SetSchema (SetSchemaRequest)   returns (MutationResponse);
+}
+
+// ─── DocumentService ─────────────────────────────────────────────────────────
+// Typed path: client sends a QueryDescriptor that encodes the SELECT projection
+// and optional WHERE predicate.  The server executes a push-down BSON scan
+// (T is never instantiated server-side) and streams raw projected bytes back.
+
+service DocumentService {
+  // Streaming typed query
+  rpc Query       (QueryRequest)          returns (stream TypedDocumentResponse);
+
+  // Write operations — payload is serialized T (BSON bytes produced by BLite mappers)
+  rpc Insert      (TypedInsertRequest)    returns (InsertResponse);
+  rpc Update      (TypedUpdateRequest)    returns (MutationResponse);
+  rpc Delete      (DeleteRequest)         returns (MutationResponse);
+
+  // Bulk typed writes
+  rpc InsertBulk  (TypedBulkInsertRequest) returns (BulkInsertResponse);
+}
+
+// ─── Shared messages ─────────────────────────────────────────────────────────
+
+message Empty {}
+
+// Opaque document identifier.  Sent as raw bytes so that ObjectId, string,
+// int32, int64, and Guid IDs are all handled uniformly.
+message BsonIdBytes {
+  bytes  value    = 1;
+  int32  id_type  = 2;  // maps to BLite.Bson.BsonIdType enum
+}
+
+// ─── DynamicService request/response messages ─────────────────────────────────
+
+message InsertRequest {
+  string     collection      = 1;
+  bytes      bson_payload    = 2;  // BsonDocument serialized to raw BSON bytes
+  string     transaction_id  = 3;  // optional — empty = auto-commit
+}
+
+message InsertResponse {
+  BsonIdBytes id     = 1;
+  string      error  = 2;
+}
+
+message UpdateRequest {
+  string      collection      = 1;
+  BsonIdBytes id              = 2;
+  bytes       bson_payload    = 3;
+  string      transaction_id  = 4;  // optional — empty = auto-commit
+}
+
+message DeleteRequest {
+  string      collection      = 1;
+  BsonIdBytes id              = 2;
+  string      transaction_id  = 3;  // optional — empty = auto-commit
+}
+
+message MutationResponse {
+  bool   success = 1;
+  string error   = 2;
+}
+
+message FindByIdRequest {
+  string      collection = 1;
+  BsonIdBytes id         = 2;
+}
+
+message DocumentResponse {
+  bytes  bson_payload = 1;  // raw BSON bytes; empty when not found
+  bool   found        = 2;
+  string error        = 3;
+}
+
+// QueryRequest is shared between DynamicService and DocumentService.
+// query_descriptor is a MessagePack-encoded QueryDescriptor.
+message QueryRequest {
+  bytes query_descriptor = 1;
+}
+
+message VectorSearchRequest {
+  string         collection   = 1;
+  string         index_name   = 2;   // empty = use first vector index
+  repeated float query_vector = 3;
+  int32          k            = 4;   // number of nearest neighbours (default 10)
+  int32          ef_search    = 5;   // HNSW efSearch (default 100, higher = more recall)
+}
+
+// ── Index management messages ─────────────────────────────────────────────────
+
+message CollectionRequest {
+  string collection = 1;
+}
+
+message CreateIndexRequest {
+  string collection = 1;
+  string field      = 2;
+  string name       = 3;        // optional — auto-generated if empty
+  bool   unique     = 4;        // BTree only: enforce uniqueness
+  bool   is_vector  = 5;        // true = create HNSW vector index
+  int32  dimensions = 6;        // vector only
+  string metric     = 7;        // vector only: "Cosine" | "L2" | "DotProduct"
+  bool   is_spatial = 8;        // true = create R-Tree spatial index
+}
+
+message DropIndexRequest {
+  string collection = 1;
+  string name       = 2;
+}
+
+message IndexKeyValue {
+  oneof value {
+    int32  int32_val    = 1;
+    int64  int64_val    = 2;
+    double double_val   = 3;
+    string string_val   = 4;
+    bool   bool_val     = 5;
+    int64  datetime_val = 6;  // DateTime as ticks (100 ns intervals since 00:00:00.0000000, 01/01/0001)
+  }
+}
+
+message QueryIndexRequest {
+  string        collection = 1;
+  string        index_name = 2;
+  IndexKeyValue min_key    = 3;
+  IndexKeyValue max_key    = 4;
+  bool          ascending  = 5;
+  int32         skip       = 6;
+  int32         take       = 7;   // 0 = no limit
+}
+
+message ListIndexesResponse {
+  repeated IndexInfo indexes = 1;
+  string             error   = 2;
+}
+
+message IndexInfo {
+  string name       = 1;
+  string field      = 2;
+  string type       = 3;        // "BTree" | "Vector" | "Spatial"
+  bool   unique     = 4;
+  int32  dimensions = 5;        // vector only
+  string metric     = 6;        // vector only
+}
+
+// ── VectorSource messages ─────────────────────────────────────────────────────
+
+message SetVectorSourceRequest {
+  string                   collection = 1;
+  string                   separator  = 2;
+  repeated VectorFieldProto fields    = 3;   // empty list = clear the configuration
+}
+
+message VectorFieldProto {
+  string path   = 1;
+  string prefix = 2;   // optional
+  string suffix = 3;   // optional
+}
+
+message GetVectorSourceResponse {
+  bool                     configured = 1;
+  string                   separator  = 2;
+  repeated VectorFieldProto fields    = 3;
+  string                   error      = 4;
+}
+
+// ── TimeSeries messages ──────────────────────────────────────────────────────
+
+message ConfigureTimeSeriesRequest {
+  string collection     = 1;
+  string ttl_field_name = 2;  // field holding the timestamp used for ordering and pruning
+  int64  retention_ms   = 3;  // how long to keep documents (milliseconds); 0 = keep forever
+}
+
+message TimeSeriesInfoResponse {
+  bool   is_time_series = 1;
+  string ttl_field_name = 2;
+  int64  retention_ms   = 3;
+  string error          = 4;
+}
+
+// ── Change Data Capture messages ─────────────────────────────────────────────
+
+message WatchRequest {
+  string collection      = 1;
+  bool   capture_payload = 2;
+}
+
+message ChangeEventResponse {
+  int64       timestamp      = 1;
+  uint64      transaction_id = 2;
+  string      collection     = 3;
+  int32       operation      = 4;   // BLite.Core.Transactions.OperationType: 0=Insert, 1=Update, 2=Delete
+  BsonIdBytes document_id    = 5;
+  bytes       bson_payload   = 6;   // empty when capture_payload=false
+  string      error          = 7;
+}
+
+// ── Schema messages ──────────────────────────────────────────────────────
+
+message SchemaFieldProto {
+  string name     = 1;
+  int32  type     = 2;   // BsonType byte value (e.g. 0x02 = String, 0x10 = Int32)
+  bool   nullable = 3;
+}
+
+message SetSchemaRequest {
+  string                   collection = 1;
+  string                   title      = 2;   // optional
+  repeated SchemaFieldProto fields    = 3;
+}
+
+message CollectionSchemaResponse {
+  bool                     has_schema     = 1;
+  string                   title          = 2;
+  int32                    version        = 3;
+  int32                    version_count  = 4;
+  repeated SchemaFieldProto fields        = 5;
+  string                   error          = 6;
+}
+
+message BulkInsertRequest {
+  string         collection      = 1;
+  repeated bytes payloads        = 2;
+  string         transaction_id  = 3;  // optional
+}
+
+message BulkInsertResponse {
+  repeated BsonIdBytes ids   = 1;
+  string               error = 2;
+}
+
+message BulkUpdateRequest {
+  string                  collection      = 1;
+  repeated BulkUpdateItem items           = 2;
+  string                  transaction_id  = 3;  // optional
+}
+
+message BulkUpdateItem {
+  BsonIdBytes id           = 1;
+  bytes       bson_payload = 2;
+}
+
+message BulkDeleteRequest {
+  string               collection      = 1;
+  repeated BsonIdBytes ids             = 2;
+  string               transaction_id  = 3;  // optional
+}
+
+message BulkMutationResponse {
+  int32  affected_count = 1;
+  string error          = 2;
+}
+
+message CollectionListResponse {
+  repeated string names = 1;
+}
+
+message DropCollectionRequest {
+  string collection = 1;
+}
+
+// ─── DocumentService request/response messages ────────────────────────────────
+
+// TypedDocumentResponse carries projected bytes (the SELECT result, not full T).
+message TypedDocumentResponse {
+  bytes  bson_payload  = 1;
+  string type_name     = 2;  // hint for client-side deserialization
+  string error         = 3;
+}
+
+message TypedInsertRequest {
+  string collection      = 1;
+  bytes  bson_payload    = 2;  // T serialized via BLite mapper
+  string type_name       = 3;
+  string transaction_id  = 4;  // optional
+}
+
+message TypedUpdateRequest {
+  string      collection      = 1;
+  BsonIdBytes id              = 2;
+  bytes       bson_payload    = 3;
+  string      type_name       = 4;
+  string      transaction_id  = 5;  // optional
+}
+
+message TypedBulkInsertRequest {
+  string         collection      = 1;
+  string         type_name       = 2;
+  repeated bytes payloads        = 3;
+  string         transaction_id  = 4;  // optional
+}
+
+// ─── MetadataService ──────────────────────────────────────────────────────────
+// Key-map negotiation between client and server.
+// The C-BSON format encodes field names as 2-byte ushort IDs whose mapping is
+// stored persistently in the global StorageEngine dictionary.
+// Clients MUST synchronise their local key map with the server before sending
+// typed payloads, so that predicate push-down works correctly.
+
+service MetadataService {
+  // Ensures every field name in the request is registered in the global
+  // dictionary, then returns the assigned ID for each requested key.
+  // Use this before inserting typed documents so that the client's local map
+  // matches the server's assignments exactly.
+  // Requires Insert (Write) permission on the specified collection.
+  rpc RegisterKeys (RegisterKeysRequest) returns (KeyMapResponse);
+
+  // Returns the full global key→id map (all keys known to the server).
+  // Useful on reconnect or when the client needs to refresh a stale cache.
+  // Requires Query (Read) permission on the specified collection.
+  rpc GetKeyMap    (KeyMapRequest)       returns (KeyMapResponse);
+}
+
+// ─── MetadataService messages ─────────────────────────────────────────────────
+
+message KeyMapRequest {
+  string collection = 1;  // permission check anchor — the collection the caller is working with
+}
+
+message RegisterKeysRequest {
+  string          collection = 1;  // permission check anchor
+  repeated string keys       = 2;  // field names to register (mapper.UsedKeys)
+}
+
+// Carries a subset (RegisterKeys) or the full (GetKeyMap) global dictionary.
+// entries: field_name → ushort id (fits in uint32; values are always ≤ 65535).
+message KeyMapResponse {
+  map<string, uint32> entries = 1;
+  string              error   = 2;
+}
+
+// ─── AdminService ─────────────────────────────────────────────────────────────
+// User and permission management.  All RPCs require a caller with Admin permission.
+
+service AdminService {
+  rpc CreateUser        (CreateUserRequest)        returns (CreateUserResponse);
+  rpc RevokeUser        (UsernameRequest)          returns (MutationResponse);
+  rpc RotateKey         (UsernameRequest)          returns (RotateKeyResponse);
+  rpc ListUsers         (Empty)                    returns (ListUsersResponse);
+  rpc UpdatePerms       (UpdatePermsRequest)       returns (MutationResponse);
+  // Tenant provisioning (hot — no restart required)
+  rpc ProvisionTenant   (ProvisionTenantRequest)   returns (ProvisionTenantResponse);
+  rpc DeprovisionTenant (DeprovisionTenantRequest) returns (DeprovisionTenantResponse);
+  rpc ListTenants       (Empty)                    returns (ListTenantsResponse);
+}
+
+// ─── AdminService messages ────────────────────────────────────────────────────
+
+message UserPermission {
+  string collection = 1;  // "*" = wildcard
+  int32  ops        = 2;  // BLiteOperation flags
+}
+
+message CreateUserRequest {
+  string                  username    = 1;
+  string                  namespace   = 2;  // empty = root namespace
+  repeated UserPermission permissions = 3;
+  string                  database_id = 4;  // empty = default (system) database
+}
+
+message CreateUserResponse {
+  string api_key = 1;  // plaintext key — shown once, never stored
+  string error   = 2;
+}
+
+message UsernameRequest {
+  string username = 1;
+}
+
+message RotateKeyResponse {
+  string api_key = 1;  // new plaintext key
+  string error   = 2;
+}
+
+message UserInfo {
+  string                  username    = 1;
+  string                  namespace   = 2;
+  bool                    active      = 3;
+  string                  created_at  = 4;  // ISO-8601 UTC
+  repeated UserPermission permissions = 5;
+  string                  database_id = 6;  // empty = default (system) database
+}
+
+message ListUsersResponse {
+  repeated UserInfo users = 1;
+  string            error = 2;
+}
+
+message UpdatePermsRequest {
+  string                  username    = 1;
+  repeated UserPermission permissions = 2;
+}
+
+// ─── Tenant provisioning messages ────────────────────────────────────────────
+
+message ProvisionTenantRequest {
+  string database_id = 1;  // new tenant identifier (lowercased, unique)
+}
+
+message ProvisionTenantResponse {
+  bool   success = 1;
+  string error   = 2;
+}
+
+message DeprovisionTenantRequest {
+  string database_id  = 1;
+  bool   delete_files = 2;  // GDPR: physically delete the .db file from disk
+}
+
+message DeprovisionTenantResponse {
+  bool   success = 1;
+  string error   = 2;
+}
+
+message TenantInfo {
+  string database_id   = 1;
+  string database_path = 2;
+  bool   is_active     = 3;  // true = engine currently open in memory
+}
+
+message ListTenantsResponse {
+  repeated TenantInfo tenants = 1;
+  string              error   = 2;
+}
+
+// ─── TransactionService ───────────────────────────────────────────────────────
+// Explicit transaction control.  Begin acquires a server-side transaction;
+// all write RPCs that carry the returned transaction_id participate in it.
+// The transaction is automatically rolled back after the configured timeout
+// (default 60 s, see Transactions:TimeoutSeconds in appsettings).
+
+service TransactionService {
+  rpc Begin    (BeginTransactionRequest)  returns (BeginTransactionResponse);
+  rpc Commit   (TransactionRequest)       returns (MutationResponse);
+  rpc Rollback (TransactionRequest)       returns (MutationResponse);
+}
+
+// ─── TransactionService messages ─────────────────────────────────────────────
+
+message BeginTransactionRequest {}
+
+message BeginTransactionResponse {
+  string transaction_id = 1;  // UUID — pass in subsequent write requests
+  string error          = 2;
+}
+
+message TransactionRequest {
+  string transaction_id = 1;
+}
+
+// ─── KvService ────────────────────────────────────────────────────────────────
+// Persistent, page-backed Key-Value store embedded in the same database file.
+// Keys are UTF-8 strings (≤ 255 bytes); values are arbitrary byte payloads.
+// The caller's database is resolved from the API key (user.DatabaseId).
+// Keys are transparently namespaced for multi-tenant isolation.
+
+service KvService {
+  // Read operations — require Query permission
+  rpc Get      (KvGetRequest)     returns (KvGetResponse);
+  rpc Exists   (KvKeyRequest)     returns (KvExistsResponse);
+  rpc ScanKeys (KvScanRequest)    returns (KvScanResponse);
+
+  // Write operations — require Write permission
+  rpc Set      (KvSetRequest)     returns (MutationResponse);
+  rpc Delete   (KvDeleteRequest)  returns (MutationResponse);
+  rpc Refresh  (KvRefreshRequest) returns (MutationResponse);
+  rpc Batch    (KvBatchRequest)   returns (KvBatchResponse);
+
+  // Maintenance — requires Admin permission
+  rpc PurgeExpired (KvDbRequest)  returns (KvPurgeResponse);
+}
+
+// ─── KvService messages ───────────────────────────────────────────────────────
+
+message KvDbRequest {}  // database resolved from caller's API key
+
+message KvGetRequest {
+  string key = 1;
+}
+
+message KvGetResponse {
+  bytes  value = 1;  // raw payload; empty when not found
+  bool   found = 2;
+  string error = 3;
+}
+
+message KvSetRequest {
+  string key    = 1;
+  bytes  value  = 2;
+  int64  ttl_ms = 3;  // 0 = no expiry
+}
+
+message KvDeleteRequest {
+  string key = 1;
+}
+
+message KvKeyRequest {
+  string key = 1;
+}
+
+message KvExistsResponse {
+  bool   exists = 1;
+  string error  = 2;
+}
+
+message KvRefreshRequest {
+  string key    = 1;
+  int64  ttl_ms = 2;  // must be > 0
+}
+
+message KvScanRequest {
+  string prefix = 1;  // empty = return all keys visible to the caller
+}
+
+message KvScanResponse {
+  repeated string keys  = 1;
+  string          error = 2;
+}
+
+message KvPurgeResponse {
+  int32  purged_count = 1;
+  string error        = 2;
+}
+
+message KvBatchOp {
+  string key       = 1;
+  bytes  value     = 2;  // ignored when is_delete = true
+  int64  ttl_ms    = 3;  // 0 = use store default
+  bool   is_delete = 4;
+}
+
+message KvBatchRequest {
+  repeated KvBatchOp operations = 1;
+}
+
+message KvBatchResponse {
+  int32  affected_count = 1;
+  string error          = 2;
+}
