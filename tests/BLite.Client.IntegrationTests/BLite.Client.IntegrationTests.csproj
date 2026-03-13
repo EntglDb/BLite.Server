@@ -11,6 +11,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="BLite" Version="3.6.4" />
+    <PackageReference Include="BLite.SourceGenerators" Version="3.6.4">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
     <!-- Test framework -->
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.3.0" />
     <PackageReference Include="xunit" Version="2.9.3" />
@@ -31,8 +36,6 @@
     <ProjectReference Include="..\..\src\BLite.Client\BLite.Client.csproj" />
     <!-- Server — started in-process via WebApplicationFactory<Program> -->
     <ProjectReference Include="..\..\..\BLite.Server\src\BLite.Server\BLite.Server.csproj" />
-    <!-- Source generator: generates IDocumentMapper<TId,T> for classes marked with [DocumentMapper] -->
-    <ProjectReference Include="..\..\..\BLite\src\BLite.SourceGenerators\BLite.SourceGenerators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
   <ItemGroup>

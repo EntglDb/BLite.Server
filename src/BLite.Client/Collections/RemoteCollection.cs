@@ -15,12 +15,16 @@
 
 using System.Buffers;
 using System.Runtime.CompilerServices;
+using System.Threading.Channels;
 using BLite.Bson;
 using BLite.Client.Internal;
 using BLite.Client.Transactions;
+using BLite.Core;
+using BLite.Core.CDC;
 using BLite.Core.Collections;
 using BLite.Core.Indexing;
 using BLite.Core.Query;
+using BLite.Core.Transactions;
 using BLite.Proto;
 using BLite.Proto.V1;
 using Google.Protobuf;
@@ -371,4 +375,239 @@ public sealed class RemoteCollection<TId, T>
         if (!string.IsNullOrEmpty(error))
             throw new InvalidOperationException($"{method} failed: {error}");
     }
+
+    // ── Index management ──────────────────────────────────────────────────────
+
+    internal async Task CreateIndexAsync(
+        string field, string? name, bool unique, CancellationToken ct)
+    {
+        await EnsureInitializedAsync(ct);
+        var response = await _dynStub.CreateIndexAsync(new CreateIndexRequest
+        {
+            Collection = Name,
+            Field      = field,
+            Name       = name ?? string.Empty,
+            Unique     = unique,
+            IsVector   = false
+        }, _headers, cancellationToken: ct);
+        ThrowIfError(response.Error, nameof(CreateIndexAsync));
+    }
+
+    internal async Task CreateVectorIndexAsync(
+        string field, int dimensions, string metric, string? name, CancellationToken ct)
+    {
+        await EnsureInitializedAsync(ct);
+        var response = await _dynStub.CreateIndexAsync(new CreateIndexRequest
+        {
+            Collection = Name,
+            Field      = field,
+            Name       = name ?? string.Empty,
+            IsVector   = true,
+            Dimensions = dimensions,
+            Metric     = metric
+        }, _headers, cancellationToken: ct);
+        ThrowIfError(response.Error, nameof(CreateVectorIndexAsync));
+    }
+
+    internal async Task<bool> DropIndexAsync(string indexName, CancellationToken ct)
+    {
+        await EnsureInitializedAsync(ct);
+        var response = await _dynStub.DropIndexAsync(new DropIndexRequest
+        {
+            Collection = Name,
+            Name       = indexName
+        }, _headers, cancellationToken: ct);
+        ThrowIfError(response.Error, nameof(DropIndexAsync));
+        return response.Success;
+    }
+
+    internal async Task ForcePruneAsync(CancellationToken ct)
+    {
+        await EnsureInitializedAsync(ct);
+        var response = await _dynStub.ForcePruneAsync(
+            new CollectionRequest { Collection = Name },
+            _headers, cancellationToken: ct);
+        ThrowIfError(response.Error, nameof(ForcePruneAsync));
+    }
+
+    internal async IAsyncEnumerable<T> VectorSearchAsync(
+        string indexName,
+        float[] query,
+        int k,
+        int efSearch,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        await EnsureInitializedAsync(ct);
+        var call = _dynStub.VectorSearch(
+            new VectorSearchRequest
+            {
+                Collection = Name,
+                IndexName  = indexName,
+                QueryVector = { query },
+                K          = k,
+                EfSearch   = efSearch
+            },
+            _headers,
+            cancellationToken: ct);
+
+        await foreach (var response in call.ResponseStream.ReadAllAsync(ct))
+        {
+            ThrowIfError(response.Error, nameof(VectorSearchAsync));
+            yield return Deserialize(response.BsonPayload.ToByteArray());
+        }
+    }
+
+    internal async Task<IReadOnlyList<CollectionIndexInfo>> ListIndexesAsync(CancellationToken ct)
+    {
+        await EnsureInitializedAsync(ct);
+        var response = await _dynStub.ListIndexesAsync(
+            new CollectionRequest { Collection = Name },
+            _headers, cancellationToken: ct);
+        ThrowIfError(response.Error, nameof(ListIndexesAsync));
+        return [.. response.Indexes.Select(i => new CollectionIndexInfo
+        {
+            Name          = i.Name,
+            PropertyPaths = [i.Field],
+            IsUnique      = i.Unique,
+            Type          = i.Type switch
+            {
+                "Vector"  => IndexType.Vector,
+                "Spatial" => IndexType.Spatial,
+                _         => IndexType.BTree
+            }
+        })];
+    }
+
+    internal async IAsyncEnumerable<T> QueryIndexAsync(
+        string indexName,
+        object? minKey,
+        object? maxKey,
+        bool ascending,
+        int skip,
+        int take,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        await EnsureInitializedAsync(ct);
+        var call = _dynStub.QueryIndex(
+            new QueryIndexRequest
+            {
+                Collection = Name,
+                IndexName  = indexName,
+                MinKey     = EncodeIndexKey(minKey),
+                MaxKey     = EncodeIndexKey(maxKey),
+                Ascending  = ascending,
+                Skip       = skip,
+                Take       = take
+            },
+            _headers,
+            cancellationToken: ct);
+
+        await foreach (var response in call.ResponseStream.ReadAllAsync(ct))
+        {
+            ThrowIfError(response.Error, nameof(QueryIndexAsync));
+            yield return Deserialize(response.BsonPayload.ToByteArray());
+        }
+    }
+
+    private static IndexKeyValue? EncodeIndexKey(object? value)
+    {
+        if (value is null) return null;
+        return value switch
+        {
+            int i      => new IndexKeyValue { Int32Val    = i },
+            long l     => new IndexKeyValue { Int64Val    = l },
+            double d   => new IndexKeyValue { DoubleVal   = d },
+            float f    => new IndexKeyValue { DoubleVal   = f },
+            string s   => new IndexKeyValue { StringVal   = s },
+            bool b     => new IndexKeyValue { BoolVal     = b },
+            DateTime dt => new IndexKeyValue { DatetimeVal = dt.Ticks },
+            _          => throw new ArgumentException(
+                $"Index key type '{value.GetType().Name}' is not supported for remote index queries.")
+        };
+    }
+
+    // ── Change Data Capture ───────────────────────────────────────────────────
+
+    internal IObservable<ChangeStreamEvent<TId, T>> WatchObservable(bool capturePayload) =>
+        new RemoteWatchObservable(this, capturePayload);
+
+    private async IAsyncEnumerable<ChangeEventResponse> WatchAsync(
+        bool capturePayload,
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        await EnsureInitializedAsync(ct);
+        var call = _dynStub.Watch(
+            new WatchRequest { Collection = Name, CapturePayload = capturePayload },
+            _headers,
+            cancellationToken: ct);
+
+        await foreach (var response in call.ResponseStream.ReadAllAsync(ct).ConfigureAwait(false))
+            yield return response;
+    }
+
+    private sealed class RemoteWatchObservable : IObservable<ChangeStreamEvent<TId, T>>
+    {
+        private readonly RemoteCollection<TId, T> _col;
+        private readonly bool _capturePayload;
+
+        public RemoteWatchObservable(RemoteCollection<TId, T> col, bool capturePayload)
+        {
+            _col = col;
+            _capturePayload = capturePayload;
+        }
+
+        public IDisposable Subscribe(IObserver<ChangeStreamEvent<TId, T>> observer)
+        {
+            var cts = new CancellationTokenSource();
+            _ = Task.Run(() => ConsumeAsync(observer, cts.Token));
+            return new CancellableHandle(cts);
+        }
+
+        private async Task ConsumeAsync(IObserver<ChangeStreamEvent<TId, T>> observer, CancellationToken ct)
+        {
+            try
+            {
+                await foreach (var response in _col.WatchAsync(_capturePayload, ct).ConfigureAwait(false))
+                {
+                    var id = _col._mapper.FromIndexKey(
+                        new BLite.Core.Indexing.IndexKey(response.DocumentId.Value.ToByteArray()));
+
+                    T? entity = null;
+                    if (response.BsonPayload.Length > 0)
+                    {
+                        var bytes = response.BsonPayload.ToByteArray();
+                        entity = _col._mapper.Deserialize(
+                            new BsonSpanReader(bytes, _col._keyMap.Reverse));
+                    }
+
+                    observer.OnNext(new ChangeStreamEvent<TId, T>
+                    {
+                        Timestamp = response.Timestamp,
+                        TransactionId = response.TransactionId,
+                        CollectionName = response.Collection,
+                        Type = (OperationType)response.Operation,
+                        DocumentId = id,
+                        Entity = entity
+                    });
+                }
+                observer.OnCompleted();
+            }
+            catch (OperationCanceledException)
+            {
+                observer.OnCompleted();
+            }
+            catch (Exception ex)
+            {
+                observer.OnError(ex);
+            }
+        }
+
+        private sealed class CancellableHandle : IDisposable
+        {
+            private readonly CancellationTokenSource _cts;
+            public CancellableHandle(CancellationTokenSource cts) => _cts = cts;
+            public void Dispose() => _cts.Cancel();
+        }
+    }
 }
+

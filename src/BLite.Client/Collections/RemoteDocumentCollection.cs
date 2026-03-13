@@ -5,6 +5,7 @@
 // Sync operations and local-engine-only features throw NotSupportedException.
 
 using BLite.Bson;
+using BLite.Core.CDC;
 using BLite.Core.Collections;
 using BLite.Core.Indexing;
 using BLite.Core.Query;
@@ -18,8 +19,9 @@ namespace BLite.Client.Collections;
 /// over gRPC.
 ///
 /// <para>
-/// Sync operations and local-engine-only features (indexes, scans, ForcePrune)
-/// throw <see cref="NotSupportedException"/>. Use the <c>Async</c> overloads.
+/// Raw-scan operations (<c>Scan</c>, <c>ParallelScan</c>) are not supported
+/// over gRPC and throw <see cref="NotSupportedException"/> at runtime.
+/// <c>Watch</c> / CDC is fully supported via <c>DynamicService.Watch</c>.
 /// </para>
 /// </summary>
 public sealed class RemoteDocumentCollection<TId, T> : IDocumentCollection<TId, T>
@@ -36,13 +38,13 @@ public sealed class RemoteDocumentCollection<TId, T> : IDocumentCollection<TId, 
     // ── Insert ────────────────────────────────────────────────────────────────
 
     public TId Insert(T entity) =>
-        throw new NotSupportedException("Use InsertAsync for remote collections.");
+        InsertAsync(entity).GetAwaiter().GetResult();
 
     public Task<TId> InsertAsync(T entity, CancellationToken ct = default) =>
         _inner.InsertAsync(entity, null, ct);
 
     public List<TId> InsertBulk(IEnumerable<T> entities) =>
-        throw new NotSupportedException("Use InsertBulkAsync for remote collections.");
+        InsertBulkAsync(entities).GetAwaiter().GetResult();
 
     public async Task<List<TId>> InsertBulkAsync(IEnumerable<T> entities, CancellationToken ct = default) =>
         (await _inner.InsertBulkAsync(entities, null, ct)).ToList();
@@ -50,7 +52,7 @@ public sealed class RemoteDocumentCollection<TId, T> : IDocumentCollection<TId, 
     // ── Read ──────────────────────────────────────────────────────────────────
 
     public T? FindById(TId id) =>
-        throw new NotSupportedException("Use FindByIdAsync for remote collections.");
+        FindByIdAsync(id).GetAwaiter().GetResult();
 
     public async ValueTask<T?> FindByIdAsync(TId id, CancellationToken ct = default) =>
         await _inner.FindByIdAsync(id, ct);
@@ -66,13 +68,13 @@ public sealed class RemoteDocumentCollection<TId, T> : IDocumentCollection<TId, 
     // ── Update ────────────────────────────────────────────────────────────────
 
     public bool Update(T entity) =>
-        throw new NotSupportedException("Use UpdateAsync for remote collections.");
+        UpdateAsync(entity).GetAwaiter().GetResult();
 
     public Task<bool> UpdateAsync(T entity, CancellationToken ct = default) =>
         _inner.UpdateAsync(entity, null, ct);
 
     public int UpdateBulk(IEnumerable<T> entities) =>
-        throw new NotSupportedException("Use UpdateBulkAsync for remote collections.");
+        UpdateBulkAsync(entities).GetAwaiter().GetResult();
 
     public Task<int> UpdateBulkAsync(IEnumerable<T> entities, CancellationToken ct = default) =>
         _inner.UpdateBulkAsync(entities, null, ct);
@@ -80,67 +82,123 @@ public sealed class RemoteDocumentCollection<TId, T> : IDocumentCollection<TId, 
     // ── Delete ────────────────────────────────────────────────────────────────
 
     public bool Delete(TId id) =>
-        throw new NotSupportedException("Use DeleteAsync for remote collections.");
+        DeleteAsync(id).GetAwaiter().GetResult();
 
     public Task<bool> DeleteAsync(TId id, CancellationToken ct = default) =>
         _inner.DeleteAsync(id, null, ct);
 
     public int DeleteBulk(IEnumerable<TId> ids) =>
-        throw new NotSupportedException("Use DeleteBulkAsync for remote collections.");
+        DeleteBulkAsync(ids).GetAwaiter().GetResult();
 
     public Task<int> DeleteBulkAsync(IEnumerable<TId> ids, CancellationToken ct = default) =>
         _inner.DeleteBulkAsync(ids, null, ct);
 
-    // ── Index management (not supported on remote) ────────────────────────────
+    // ── Index management ──────────────────────────────────────────────────────
 
-    public CollectionSecondaryIndex<TId, T> CreateIndex<TKey>(
+    public ICollectionIndex<TId, T> CreateIndex<TKey>(
         Expression<Func<T, TKey>> keySelector, string? name = null, bool unique = false) =>
-        throw new NotSupportedException("Index operations are not supported on remote collections.");
+        CreateIndexAsync(keySelector, name, unique).GetAwaiter().GetResult();
 
-    public Task<CollectionSecondaryIndex<TId, T>> CreateIndexAsync<TKey>(
+    public async Task<ICollectionIndex<TId, T>> CreateIndexAsync<TKey>(
         Expression<Func<T, TKey>> keySelector, string? name = null, bool unique = false,
-        CancellationToken ct = default) =>
-        throw new NotSupportedException("Index operations are not supported on remote collections.");
+        CancellationToken ct = default)
+    {
+        var paths = ExpressionAnalyzer.ExtractPropertyPaths(keySelector);
+        var field = string.Join(".", paths);
+        var indexName = name ?? $"idx_{string.Join("_", paths)}";
+        await _inner.CreateIndexAsync(field, indexName, unique, ct);
+        return new RemoteCollectionIndex<TId, T>(indexName, paths, IndexType.BTree, unique, QueryIndexAsync);
+    }
 
-    public CollectionSecondaryIndex<TId, T> CreateVectorIndex<TKey>(
+    public ICollectionIndex<TId, T> CreateVectorIndex<TKey>(
         Expression<Func<T, TKey>> keySelector, int dimensions,
         VectorMetric metric = VectorMetric.Cosine, string? name = null) =>
-        throw new NotSupportedException("Index operations are not supported on remote collections.");
+        CreateVectorIndexAsync(keySelector, dimensions, metric, name).GetAwaiter().GetResult();
 
-    public Task<CollectionSecondaryIndex<TId, T>> CreateVectorIndexAsync<TKey>(
+    public async Task<ICollectionIndex<TId, T>> CreateVectorIndexAsync<TKey>(
         Expression<Func<T, TKey>> keySelector, int dimensions,
         VectorMetric metric = VectorMetric.Cosine, string? name = null,
-        CancellationToken ct = default) =>
-        throw new NotSupportedException("Index operations are not supported on remote collections.");
+        CancellationToken ct = default)
+    {
+        var paths = ExpressionAnalyzer.ExtractPropertyPaths(keySelector);
+        var field = string.Join(".", paths);
+        var indexName = name ?? $"idx_{string.Join("_", paths)}";
+        await _inner.CreateVectorIndexAsync(field, dimensions, metric.ToString(), indexName, ct);
+        return new RemoteCollectionIndex<TId, T>(indexName, paths, IndexType.Vector, false, QueryIndexAsync, dimensions, metric, VectorSearchAsync);
+    }
 
-    public CollectionSecondaryIndex<TId, T> EnsureIndex<TKey>(
+    public ICollectionIndex<TId, T> EnsureIndex<TKey>(
         Expression<Func<T, TKey>> keySelector, string? name = null, bool unique = false) =>
-        throw new NotSupportedException("Index operations are not supported on remote collections.");
+        EnsureIndexAsync(keySelector, name, unique).GetAwaiter().GetResult();
 
-    public Task<CollectionSecondaryIndex<TId, T>> EnsureIndexAsync<TKey>(
+    public async Task<ICollectionIndex<TId, T>> EnsureIndexAsync<TKey>(
         Expression<Func<T, TKey>> keySelector, string? name = null, bool unique = false,
-        CancellationToken ct = default) =>
-        throw new NotSupportedException("Index operations are not supported on remote collections.");
+        CancellationToken ct = default)
+    {
+        var paths = ExpressionAnalyzer.ExtractPropertyPaths(keySelector);
+        var indexName = name ?? $"idx_{string.Join("_", paths)}";
+        var existing = await ListIndexesAsync(ct);
+        var found = existing.FirstOrDefault(i => i.Name == indexName);
+        if (found != null)
+        {
+            var vsDelegate = found.Type == IndexType.Vector ? (Func<string, float[], int, int, CancellationToken, IAsyncEnumerable<T>>?)VectorSearchAsync : null;
+            return new RemoteCollectionIndex<TId, T>(found.Name, found.PropertyPaths, found.Type, found.IsUnique, QueryIndexAsync, vectorSearchDelegate: vsDelegate);
+        }
+        return await CreateIndexAsync(keySelector, name, unique, ct);
+    }
 
     public bool DropIndex(string name) =>
-        throw new NotSupportedException("Index operations are not supported on remote collections.");
+        DropIndexAsync(name).GetAwaiter().GetResult();
 
     public Task<bool> DropIndexAsync(string name, CancellationToken ct = default) =>
-        throw new NotSupportedException("Index operations are not supported on remote collections.");
+        _inner.DropIndexAsync(name, ct);
 
     public IEnumerable<CollectionIndexInfo> GetIndexes() =>
-        throw new NotSupportedException("Index operations are not supported on remote collections.");
+        ListIndexesAsync().GetAwaiter().GetResult();
 
-    public CollectionSecondaryIndex<TId, T>? GetIndex(string name) =>
-        throw new NotSupportedException("Index operations are not supported on remote collections.");
+    public ICollectionIndex<TId, T>? GetIndex(string name)
+    {
+        var all = ListIndexesAsync().GetAwaiter().GetResult();
+        var found = all.FirstOrDefault(i => i.Name == name);
+        if (found is null) return null;
+        var vsDelegate = found.Type == IndexType.Vector ? (Func<string, float[], int, int, CancellationToken, IAsyncEnumerable<T>>?)VectorSearchAsync : null;
+        return new RemoteCollectionIndex<TId, T>(found.Name, found.PropertyPaths, found.Type, found.IsUnique, QueryIndexAsync, vectorSearchDelegate: vsDelegate);
+    }
 
-    public IEnumerable<T> QueryIndex(string indexName, object? minKey, object? maxKey, bool ascending = true) =>
-        throw new NotSupportedException("Index operations are not supported on remote collections.");
+    public IEnumerable<T> QueryIndex(string indexName, object? minKey, object? maxKey, bool ascending = true)
+    {
+        async Task<List<T>> CollectAsync()
+        {
+            var list = new List<T>();
+            await foreach (var item in QueryIndexAsync(indexName, minKey, maxKey, ascending))
+                list.Add(item);
+            return list;
+        }
+        return CollectAsync().GetAwaiter().GetResult();
+    }
 
-    public IAsyncEnumerable<T> QueryIndexAsync(
+    public async IAsyncEnumerable<T> QueryIndexAsync(
         string indexName, object? minKey, object? maxKey, bool ascending = true,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        await foreach (var item in _inner.QueryIndexAsync(indexName, minKey, maxKey, ascending, 0, 0, ct))
+            yield return item;
+    }
+
+    public async IAsyncEnumerable<T> VectorSearchAsync(
+        string indexName, float[] query, int k, int efSearch = 100,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        await foreach (var item in _inner.VectorSearchAsync(indexName, query, k, efSearch, ct))
+            yield return item;
+    }
+
+    /// <summary>
+    /// Returns all indexes on this collection.
+    /// </summary>
+    public Task<IReadOnlyList<CollectionIndexInfo>> ListIndexesAsync(
         CancellationToken ct = default) =>
-        throw new NotSupportedException("Index operations are not supported on remote collections.");
+        _inner.ListIndexesAsync(ct);
 
     // ── Scan (not supported on remote) ───────────────────────────────────────
 
@@ -168,5 +226,10 @@ public sealed class RemoteDocumentCollection<TId, T> : IDocumentCollection<TId, 
     // ── TimeSeries (not supported on remote) ─────────────────────────────────
 
     public void ForcePrune() =>
-        throw new NotSupportedException("ForcePrune is not supported on remote collections.");
+        _inner.ForcePruneAsync(default).GetAwaiter().GetResult();
+
+    // ── Change Data Capture ───────────────────────────────────────────────────
+
+    public IObservable<ChangeStreamEvent<TId, T>> Watch(bool capturePayload = false) =>
+        _inner.WatchObservable(capturePayload);
 }

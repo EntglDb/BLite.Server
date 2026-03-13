@@ -2,8 +2,10 @@
 // Copyright (C) 2026 Luca Fabbri — AGPL-3.0
 
 using System.Collections.Concurrent;
+using System.Threading.Channels;
 using BLite.Bson;
 using BLite.Core;
+using BLite.Core.CDC;
 using BLite.Core.Indexing;
 using BLite.Core.Storage;
 using BLite.Proto;
@@ -484,6 +486,66 @@ public sealed class DynamicServiceImpl : DynamicService.DynamicServiceBase
         }
     }
 
+    public override async Task QueryIndex(
+        QueryIndexRequest request,
+        IServerStreamWriter<DocumentResponse> responseStream,
+        ServerCallContext context)
+    {
+        var (col, user) = AuthorizeWithUser(context, request.Collection, BLiteOperation.Query);
+        var engine = _registry.GetEngine(user.DatabaseId);
+        var ct = context.CancellationToken;
+        try
+        {
+            var collection = engine.GetOrCreateCollection(col);
+            var minKey = DecodeIndexKey(request.MinKey);
+            var maxKey = DecodeIndexKey(request.MaxKey);
+            var skip   = request.Skip > 0 ? request.Skip : 0;
+            var take   = request.Take > 0 ? request.Take : int.MaxValue;
+
+            IEnumerable<BsonDocument> source = collection.QueryIndex(request.IndexName, minKey, maxKey);
+            if (!request.Ascending)
+                source = source.Reverse(); // buffers all in memory; ascending is preferred for large result sets
+
+            int emitted = 0;
+            int seen = 0;
+            foreach (var doc in source)
+            {
+                ct.ThrowIfCancellationRequested();
+                if (seen++ < skip) continue;
+                if (emitted >= take) break;
+                var payload = BsonPayloadSerializer.Serialize(doc);
+                await responseStream.WriteAsync(
+                    new DocumentResponse { BsonPayload = ByteString.CopyFrom(payload), Found = true }, ct);
+                emitted++;
+            }
+        }
+        catch (RpcException) { throw; }
+        catch (ArgumentException ex)
+        {
+            throw new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "QueryIndex failed on collection {Col}", col);
+            throw new RpcException(new Status(StatusCode.Internal, ex.Message));
+        }
+    }
+
+    private static object? DecodeIndexKey(IndexKeyValue? keyValue)
+    {
+        if (keyValue is null) return null;
+        return keyValue.ValueCase switch
+        {
+            IndexKeyValue.ValueOneofCase.Int32Val    => (object)keyValue.Int32Val,
+            IndexKeyValue.ValueOneofCase.Int64Val    => keyValue.Int64Val,
+            IndexKeyValue.ValueOneofCase.DoubleVal   => keyValue.DoubleVal,
+            IndexKeyValue.ValueOneofCase.StringVal   => keyValue.StringVal,
+            IndexKeyValue.ValueOneofCase.BoolVal     => keyValue.BoolVal,
+            IndexKeyValue.ValueOneofCase.DatetimeVal => new DateTime(keyValue.DatetimeVal, DateTimeKind.Utc),
+            _                                        => null
+        };
+    }
+
     // -- VectorSource ---------------------------------------------------------
 
     public override Task<MutationResponse> SetVectorSource(
@@ -738,4 +800,61 @@ public sealed class DynamicServiceImpl : DynamicService.DynamicServiceBase
     /// <summary>Returns the engine's ushort→name reverse key map for BSON deserialization.</summary>
     private static ConcurrentDictionary<ushort, string> ReverseKeys(BLiteEngine engine)
         => (ConcurrentDictionary<ushort, string>)engine.GetKeyReverseMap();
+
+    // ── Change Data Capture ───────────────────────────────────────────────────
+
+    public override async Task Watch(
+        WatchRequest request,
+        IServerStreamWriter<ChangeEventResponse> responseStream,
+        ServerCallContext context)
+    {
+        var (col, user) = AuthorizeWithUser(context, request.Collection, BLiteOperation.Query);
+        var engine = _registry.GetEngine(user.DatabaseId);
+        var ct = context.CancellationToken;
+        var collection = engine.GetOrCreateCollection(col);
+
+        var channel = Channel.CreateUnbounded<BsonChangeEvent>(new UnboundedChannelOptions
+        {
+            SingleReader = true
+        });
+
+        using var sub = collection.Watch(request.CapturePayload)
+            .Subscribe(new ChannelObserver<BsonChangeEvent>(channel.Writer));
+
+        try
+        {
+            await foreach (var evt in channel.Reader.ReadAllAsync(ct).ConfigureAwait(false))
+            {
+                var response = new ChangeEventResponse
+                {
+                    Timestamp = evt.Timestamp,
+                    TransactionId = evt.TransactionId,
+                    Collection = evt.CollectionName,
+                    Operation = (int)evt.Type,
+                    DocumentId = new BsonIdBytes
+                    {
+                        Value = ByteString.CopyFrom(evt.IdBytes.Span),
+                        IdType = (int)evt.IdType
+                    },
+                    BsonPayload = evt.Payload != null
+                        ? ByteString.CopyFrom(evt.Payload.RawData)
+                        : ByteString.Empty
+                };
+                await responseStream.WriteAsync(response, ct).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            channel.Writer.TryComplete();
+        }
+    }
+
+    private sealed class ChannelObserver<T> : IObserver<T>
+    {
+        private readonly ChannelWriter<T> _writer;
+        public ChannelObserver(ChannelWriter<T> writer) => _writer = writer;
+        public void OnNext(T value) => _writer.TryWrite(value);
+        public void OnError(Exception error) => _writer.Complete(error);
+        public void OnCompleted() => _writer.Complete();
+    }
 }

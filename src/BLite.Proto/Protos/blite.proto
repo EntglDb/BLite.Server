@@ -38,6 +38,7 @@ service DynamicService {
   rpc CreateIndex     (CreateIndexRequest)    returns (MutationResponse);
   rpc DropIndex       (DropIndexRequest)      returns (MutationResponse);
   rpc ListIndexes     (CollectionRequest)     returns (ListIndexesResponse);
+  rpc QueryIndex      (QueryIndexRequest)     returns (stream DocumentResponse);
 
   // VectorSource (embedding source field configuration)
   rpc SetVectorSource (SetVectorSourceRequest)  returns (MutationResponse);
@@ -47,6 +48,9 @@ service DynamicService {
   rpc ConfigureTimeSeries (ConfigureTimeSeriesRequest) returns (MutationResponse);
   rpc GetTimeSeriesInfo   (CollectionRequest)          returns (TimeSeriesInfoResponse);
   rpc ForcePrune          (CollectionRequest)          returns (MutationResponse);
+
+  // Change Data Capture — server streams change events for this collection
+  rpc Watch (WatchRequest) returns (stream ChangeEventResponse);
 
   // Schema management
   rpc GetSchema (CollectionRequest)  returns (CollectionSchemaResponse);
@@ -160,6 +164,27 @@ message DropIndexRequest {
   string name       = 2;
 }
 
+message IndexKeyValue {
+  oneof value {
+    int32  int32_val    = 1;
+    int64  int64_val    = 2;
+    double double_val   = 3;
+    string string_val   = 4;
+    bool   bool_val     = 5;
+    int64  datetime_val = 6;  // DateTime as ticks (100 ns intervals since 00:00:00.0000000, 01/01/0001)
+  }
+}
+
+message QueryIndexRequest {
+  string        collection = 1;
+  string        index_name = 2;
+  IndexKeyValue min_key    = 3;
+  IndexKeyValue max_key    = 4;
+  bool          ascending  = 5;
+  int32         skip       = 6;
+  int32         take       = 7;   // 0 = no limit
+}
+
 message ListIndexesResponse {
   repeated IndexInfo indexes = 1;
   string             error   = 2;
@@ -208,6 +233,23 @@ message TimeSeriesInfoResponse {
   string ttl_field_name = 2;
   int64  retention_ms   = 3;
   string error          = 4;
+}
+
+// ── Change Data Capture messages ─────────────────────────────────────────────
+
+message WatchRequest {
+  string collection      = 1;
+  bool   capture_payload = 2;
+}
+
+message ChangeEventResponse {
+  int64       timestamp      = 1;
+  uint64      transaction_id = 2;
+  string      collection     = 3;
+  int32       operation      = 4;   // BLite.Core.Transactions.OperationType: 0=Insert, 1=Update, 2=Delete
+  BsonIdBytes document_id    = 5;
+  bytes       bson_payload   = 6;   // empty when capture_payload=false
+  string      error          = 7;
 }
 
 // ── Schema messages ──────────────────────────────────────────────────────

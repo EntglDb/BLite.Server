@@ -3,6 +3,7 @@
     "BLite.Sample": {
       "commandName": "Project",
       "launchBrowser": true,
+      "launchUrl": "https://localhost:55221/scalar",
       "environmentVariables": {
         "ASPNETCORE_ENVIRONMENT": "Development"
       },
