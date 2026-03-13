@@ -59,6 +59,7 @@ internal static class QueryModelToDescriptorConverter
             BinaryExpression binary => ConvertBinary(binary),
             UnaryExpression { NodeType: ExpressionType.Not } unary => ConvertNot(unary),
             MethodCallExpression call => ConvertMethodCall(call),
+            MemberExpression member => ConvertMemberAccess(member),
             // Handle invocations wrapping lambdas (from chained Where)
             InvocationExpression inv => ConvertFilter(inv.Expression is LambdaExpression l ? l.Body : inv),
             _ => throw new NotSupportedException(
@@ -192,6 +193,23 @@ internal static class QueryModelToDescriptorConverter
 
         throw new NotSupportedException(
             $"Method '{call.Method.DeclaringType?.Name}.{methodName}' is not supported for remote query push-down.");
+    }
+
+    private static FilterNode ConvertMemberAccess(MemberExpression member)
+    {
+        var field = ExtractMemberName(member);
+        if (field is not null && member.Type == typeof(bool))
+        {
+            return new BinaryFilter
+            {
+                Field = field,
+                Op = FilterOp.Eq,
+                Value = ScalarValue.From(true)
+            };
+        }
+
+        throw new NotSupportedException(
+            $"Member access '{member}' is not supported for remote query push-down.");
     }
 
     // ── Projection conversion ─────────────────────────────────────────────────

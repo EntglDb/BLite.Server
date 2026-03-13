@@ -42,7 +42,8 @@ public class QueryableTests : IntegrationTestBase
                 Id    = i,
                 Name  = $"Product{i:D2}",
                 Price = i * 10.0m,
-                Stock = i * 2
+                Stock = i * 2,
+                Active = i % 2 == 0
             });
 
         return (client, col);
@@ -63,6 +64,20 @@ public class QueryableTests : IntegrationTestBase
         // Products with Stock > 4: P3(6), P4(8), P5(10) → 3 items
         Assert.Equal(3, results.Count);
         Assert.All(results, p => Assert.True(p.Stock > 4));
+    }
+
+    [Fact]
+    public async Task AsQueryable_Where_BooleanMemberAccess_PushesFilterToServer()
+    {
+        var (client, col) = await SetupWithProductsAsync();
+        await using var _ = client;
+
+        var results = await col.AsQueryable()
+            .Where(p => p.Active)
+            .ToListAsync();
+
+        Assert.Equal(2, results.Count);
+        Assert.All(results, p => Assert.True(p.Active));
     }
 
     [Fact]
