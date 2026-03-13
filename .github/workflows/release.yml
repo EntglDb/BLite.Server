@@ -4,6 +4,7 @@
 # Triggered by version tags (v*.*.*).
 # Produces:
 #   • Docker image pushed to ghcr.io/entgldb/blite-server
+#   • Docker image pushed to docker.io/mrdevrobotentgldb/blite-server
 #   • Windows installer (.exe) built with Inno Setup 6
 #   • Linux tarball (.tar.gz) with self-contained binary + install.sh
 #   • GitHub Release with all artifacts attached
@@ -51,6 +52,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       - name: Build and push image
         uses: docker/build-push-action@v6
         with:
@@ -63,6 +70,8 @@ jobs:
           tags: |
             ghcr.io/entgldb/blite-server:${{ steps.version.outputs.version }}
             ghcr.io/entgldb/blite-server:latest
+            mrdevrobotentgldb/blite-server:${{ steps.version.outputs.version }}
+            mrdevrobotentgldb/blite-server:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: |
@@ -209,6 +218,9 @@ jobs:
 
             ```bash
             docker pull ghcr.io/entgldb/blite-server:${{ github.ref_name }}
+            # or
+            docker pull mrdevrobotentgldb/blite-server:${{ github.ref_name }}
+
             docker run -d \
               -e Auth__RootKey=<your-secret-key> \
               -p 2626:2626 \
