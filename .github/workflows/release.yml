@@ -246,7 +246,7 @@ jobs:
 
       - name: Install dependencies
         working-directory: src/BLite.Client.TypeScript
-        run: npm ci
+        run: npm install
 
       - name: Set version
         working-directory: src/BLite.Client.TypeScript
