@@ -9,7 +9,7 @@
     <RootNamespace>BLite.Client.SourceGenerators</RootNamespace>
     <AssemblyName>BLite.Client.SourceGenerators</AssemblyName>
 
-    <Version>0.1.3</Version>
+    <Version>0.1.4</Version>
     <Authors>BLite Team</Authors>
     <Company>EntglDb</Company>
     <Copyright>Copyright © 2026 Luca Fabbri</Copyright>

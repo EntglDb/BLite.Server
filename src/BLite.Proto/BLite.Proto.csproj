@@ -8,9 +8,9 @@
     <RootNamespace>BLite.Proto</RootNamespace>
     <AssemblyName>BLite.Proto</AssemblyName>
 
-    <Version>0.1.3</Version>
-    <AssemblyVersion>0.1.3.0</AssemblyVersion>
-    <FileVersion>0.1.3.0</FileVersion>
+    <Version>0.1.4</Version>
+    <AssemblyVersion>0.1.4.0</AssemblyVersion>
+    <FileVersion>0.1.4.0</FileVersion>
     <Authors>BLite Team</Authors>
     <Company>EntglDb</Company>
     <Copyright>Copyright © 2026 Luca Fabbri</Copyright>
