@@ -40,8 +40,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\BLite.Proto\BLite.Proto.csproj" />
-    <!-- BLite engine — direct project reference (local workspace) -->
-    <ProjectReference Include="..\..\..\BLite\src\BLite\BLite.csproj" />
   </ItemGroup>
 
   <ItemGroup>
