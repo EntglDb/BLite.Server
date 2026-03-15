@@ -8,6 +8,9 @@
 		},
 		{
 			"path": "../BLite.Website"
+		},
+		{
+			"path": "../BLite.LicenseHub"
 		}
 	],
 	"settings": {}
