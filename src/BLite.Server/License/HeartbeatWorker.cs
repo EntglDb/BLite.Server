@@ -8,14 +8,19 @@ namespace BLite.Server.License;
 
 public sealed class HeartbeatWorker : BackgroundService
 {
+    // Heartbeat is always enabled and cannot be disabled by end-users.
+    // This allows the EntglDb team to monitor active deployments and detect
+    // potential license/ToS violations.
+    // Policy: if a valid license is present, missed heartbeats do NOT cause
+    // any restriction on server functionality — the heartbeat is telemetry only.
+    private static readonly TimeSpan Interval = TimeSpan.FromMinutes(60);
+
     private readonly ILogger<HeartbeatWorker> _log;
     private readonly LicenseManager           _license;
     private readonly InstanceIdProvider       _instance;
     private readonly IHttpClientFactory       _httpFactory;
     private readonly string                   _hubUrl;
     private readonly string                   _licenseFilePath;
-    private readonly bool                     _enabled;
-    private readonly TimeSpan                 _interval;
     private readonly DateTime                 _startedAt = DateTime.UtcNow;
 
     public HeartbeatWorker(
@@ -31,19 +36,10 @@ public sealed class HeartbeatWorker : BackgroundService
         _httpFactory     = httpFactory;
         _hubUrl          = cfg.GetValue<string>("License:HubUrl")   ?? "https://licensehub.blitedb.com";
         _licenseFilePath = cfg.GetValue<string>("License:FilePath") ?? string.Empty;
-        _enabled         = cfg.GetValue<bool?>("License:HeartbeatEnabled") ?? true;
-        var minutes      = cfg.GetValue<int?>("License:HeartbeatIntervalMinutes") ?? 60;
-        _interval        = TimeSpan.FromMinutes(Math.Max(1, minutes));
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        if (!_enabled)
-        {
-            _log.LogInformation("Heartbeat disabled via configuration.");
-            return;
-        }
-
         // Stagger start time so many instances don't all fire simultaneously
         var jitter = TimeSpan.FromSeconds(Random.Shared.Next(0, 120));
         await Task.Delay(jitter, stoppingToken);
@@ -51,17 +47,12 @@ public sealed class HeartbeatWorker : BackgroundService
         while (!stoppingToken.IsCancellationRequested)
         {
             await SendHeartbeatAsync(stoppingToken);
-            await Task.Delay(_interval, stoppingToken);
+            await Task.Delay(Interval, stoppingToken);
         }
     }
 
     private async Task SendHeartbeatAsync(CancellationToken ct)
     {
-        if (_license.Current is null)
-        {
-            _log.LogDebug("No license loaded — skipping heartbeat.");
-            return;
-        }
 
         try
         {

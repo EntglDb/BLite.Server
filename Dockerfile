@@ -67,9 +67,6 @@ ENV LICENSE__SOURCEURL=https://github.com/EntglDb/BLite.Server
 ENV LICENSE__HUBURL=https://licensehub.blitedb.com
 # Path to a license file on disk (leave empty to use Hub-based validation)
 ENV LICENSE__FILEPATH=
-# Whether to send periodic heartbeat pings to the License Hub
-ENV LICENSE__HEARTBEATENABLED=true
-ENV LICENSE__HEARTBEATINTERVALMINUTES=60
 # PEM-encoded public key used to verify offline license files (leave empty for Hub validation)
 ENV LICENSE__PUBLICKEYPEM=
 
