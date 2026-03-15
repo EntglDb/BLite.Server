@@ -57,13 +57,45 @@ ENV STUDIO__HOST=
 # Data paths — mount a volume at /data to persist the database
 ENV BLITESERVER__DATABASEPATH=/data/blite.db
 ENV BLITESERVER__DATABASESDIRECTORY=/data/tenants
+# Page size in bytes for the storage engine (default: 16384). Must be a power of 2.
+ENV BLITESERVER__MAXPAGESIZEBYTES=16384
 
+# License management
 # AGPLv3 §13 source disclosure URL (override if you self-host a fork)
 ENV LICENSE__SOURCEURL=https://github.com/EntglDb/BLite.Server
+# URL of the BLite License Hub (for commercial license validation)
+ENV LICENSE__HUBURL=https://licensehub.blitedb.com
+# Path to a license file on disk (leave empty to use Hub-based validation)
+ENV LICENSE__FILEPATH=
+# Whether to send periodic heartbeat pings to the License Hub
+ENV LICENSE__HEARTBEATENABLED=true
+ENV LICENSE__HEARTBEATINTERVALMINUTES=60
+# PEM-encoded public key used to verify offline license files (leave empty for Hub validation)
+ENV LICENSE__PUBLICKEYPEM=
 
 # Root API key — set Auth__RootKey to provision the root user on first start.
 # After the first start the value is no longer required (setup is persisted).
 # Example: -e Auth__RootKey=my-secret-key
+
+# Telemetry / OpenTelemetry
+# Set Telemetry__Otlp__Endpoint to your OTLP collector URL to enable export.
+# Leave empty (default) to disable all OTLP export.
+ENV TELEMETRY__ENABLED=true
+ENV TELEMETRY__SERVICENAME=blite-server
+ENV TELEMETRY__CONSOLE=false
+ENV TELEMETRY__OTLP__ENDPOINT=
+
+# Transaction timeout (seconds). A transaction not committed/rolled back within
+# this window is automatically aborted.
+ENV TRANSACTIONS__TIMEOUTSECONDS=60
+
+# Query result cache
+ENV QUERYCACHE__ENABLED=true
+# Maximum in-memory size of the query cache in bytes (default: 64 MB)
+ENV QUERYCACHE__MAXSIZEBYTES=67108864
+
+# Log level: Trace | Debug | Information | Warning | Error | Critical
+ENV LOGGING__LOGLEVEL__DEFAULT=Information
 
 ENV ASPNETCORE_ENVIRONMENT=Production
 
