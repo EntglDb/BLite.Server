@@ -5,6 +5,7 @@
 // CancellationChangeToken-based invalidation.
 
 using System.Collections.Concurrent;
+using BLite.Server.License;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Primitives;
@@ -16,7 +17,8 @@ namespace BLite.Server.Caching;
 /// </summary>
 public sealed class QueryCacheService(
     IMemoryCache cache,
-    IOptions<QueryCacheOptions> opts)
+    IOptions<QueryCacheOptions> opts,
+    RestrictionService restrictions)
 {
     private readonly QueryCacheOptions _opts = opts.Value;
 
@@ -24,7 +26,7 @@ public sealed class QueryCacheService(
     // Cancelling it expires all cache entries tagged with that collection.
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _tokens = new();
 
-    public bool Enabled => _opts.Enabled;
+    public bool Enabled => _opts.Enabled && !restrictions.Current.DisableQueryCache;
 
     // ── Read ──────────────────────────────────────────────────────────────────
 

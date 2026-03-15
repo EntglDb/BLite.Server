@@ -2,6 +2,7 @@
 @inject StudioService Studio
 @inject NavigationManager Nav
 @inject AuthenticationStateProvider AuthStateProvider
+@inject BLite.Server.License.RestrictionService Restrictions
 @using Microsoft.AspNetCore.Components.Authorization
 
 @if (Studio.IsSetupComplete && _isAuthenticated)
@@ -32,6 +33,13 @@
         </div>
     </nav>
     <main class="studio-main">
+        @if (Restrictions.Current.WarnBannerMessage is { } msg)
+        {
+            <div class="restriction-banner">
+                <span class="restriction-banner-icon">⚠️</span>
+                @msg
+            </div>
+        }
         @Body
     </main>
 </div>

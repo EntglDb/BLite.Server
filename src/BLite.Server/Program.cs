@@ -13,6 +13,7 @@ using BLite.Server.Rest;
 using BLite.Server.Services;
 using BLite.Server.Caching;
 using BLite.Server.Studio;
+using BLite.Server.License;
 using BLite.Server.Telemetry;
 using BLite.Server.Transactions;
 using Microsoft.AspNetCore.Authentication;
@@ -79,6 +80,7 @@ builder.Services.AddSingleton<AuthorizationService>();
 builder.Services.AddHttpClient("heartbeat");
 builder.Services.AddSingleton<BLite.Server.License.InstanceIdProvider>();
 builder.Services.AddSingleton<BLite.Server.License.LicenseManager>();
+builder.Services.AddSingleton<RestrictionService>();
 builder.Services.AddHostedService<BLite.Server.License.HeartbeatWorker>();
 
 // Embedding service
@@ -174,6 +176,7 @@ if (telemetryOn)
 // gRPC
 builder.Services.AddGrpc(options =>
 {
+    options.Interceptors.Add<RestrictionInterceptor>();  // must run first — applies delay
     options.Interceptors.Add<TelemetryInterceptor>();
     options.EnableDetailedErrors = builder.Environment.IsDevelopment();
     options.MaxReceiveMessageSize = 16 * 1024 * 1024; // 16 MB
@@ -293,6 +296,11 @@ if (studioEnabled)
 app.UseWhen(
     ctx => ctx.Request.ContentType?.StartsWith("application/grpc") == true,
     branch => branch.UseMiddleware<ApiKeyMiddleware>());
+
+// REST operation delay restriction (applied to all non-gRPC paths)
+app.UseWhen(
+    ctx => ctx.Request.ContentType?.StartsWith("application/grpc") != true,
+    branch => branch.UseMiddleware<RestrictionMiddleware>());
 
 // Cookie auth for Studio UI
 if (studioEnabled)
