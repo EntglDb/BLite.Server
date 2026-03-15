@@ -35,7 +35,7 @@
     <!-- Client under test -->
     <ProjectReference Include="..\..\src\BLite.Client\BLite.Client.csproj" />
     <!-- Server — started in-process via WebApplicationFactory<Program> -->
-    <ProjectReference Include="..\..\..\BLite.Server\src\BLite.Server\BLite.Server.csproj" />
+    <ProjectReference Include="..\..\src\BLite.Server\BLite.Server.csproj" />
   </ItemGroup>
 
   <ItemGroup>

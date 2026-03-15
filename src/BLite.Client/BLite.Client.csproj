@@ -27,9 +27,9 @@
   <ItemGroup>    <InternalsVisibleTo Include="BLite.Client.IntegrationTests" />
   </ItemGroup>
 
-  <ItemGroup>    <!-- BLite engine — direct project reference (local workspace) -->
+  <ItemGroup>
     <!-- gRPC proto definitions + QueryDescriptor -->
-    <ProjectReference Include="..\..\..\BLite.Server\src\BLite.Proto\BLite.Proto.csproj" />
+    <ProjectReference Include="..\BLite.Proto\BLite.Proto.csproj" />
     <!-- Remote context source generator -->
     <ProjectReference Include="..\BLite.Client.SourceGenerators\BLite.Client.SourceGenerators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
   </ItemGroup>
