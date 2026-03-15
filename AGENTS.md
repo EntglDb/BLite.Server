@@ -393,7 +393,7 @@ Do **not** add comments that paraphrase the code. Only add comments that explain
     "Enabled": true,
     "ServiceName": "blite-server",
     "Console": null,
-    "Otlp": { "Endpoint": "https://..." }
+    "Otlp": { "Endpoint": "" }           // empty = disabled; set to your collector URL to enable
   },
   "License": {
     "SourceUrl": "https://github.com/EntglDb/BLite.Server"
