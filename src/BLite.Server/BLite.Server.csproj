@@ -69,6 +69,9 @@
     <PackageReference Include="OpenTelemetry.Exporter.Console" Version="1.15.0" />
     <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.15.0" />
     <PackageReference Include="Scalar.AspNetCore" Version="2.*" />
+    <!-- License validation -->
+    <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.4.0" />
+    <PackageReference Include="Microsoft.IdentityModel.Tokens" Version="8.4.0" />
   </ItemGroup>
 
 </Project>

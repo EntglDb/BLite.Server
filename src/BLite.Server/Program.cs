@@ -75,6 +75,12 @@ builder.Services.AddSingleton<UserRepository>(sp =>
 builder.Services.AddSingleton<ApiKeyValidator>();
 builder.Services.AddSingleton<AuthorizationService>();
 
+// License management
+builder.Services.AddHttpClient("heartbeat");
+builder.Services.AddSingleton<BLite.Server.License.InstanceIdProvider>();
+builder.Services.AddSingleton<BLite.Server.License.LicenseManager>();
+builder.Services.AddHostedService<BLite.Server.License.HeartbeatWorker>();
+
 // Embedding service
 builder.Services.AddSingleton<EmbeddingService>();
 

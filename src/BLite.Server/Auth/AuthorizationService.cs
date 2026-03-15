@@ -29,9 +29,15 @@ public sealed class AuthorizationService
     {
         if (!user.Active) return false;
 
-        // Collections starting with '_' are reserved — only Admin can access them.
-        if (collection.StartsWith('_') && (op & BLiteOperation.Admin) == 0)
-            return false;
+        // Collections starting with '_' are reserved.
+        // The caller must hold Admin permission on '*' or the specific collection.
+        if (collection.StartsWith('_'))
+        {
+            bool hasAdmin = user.Permissions.Any(p =>
+                (p.Collection == "*" || p.Collection.Equals(collection, StringComparison.Ordinal)) &&
+                (p.Ops & BLiteOperation.Admin) != 0);
+            if (!hasAdmin) return false;
+        }
 
         foreach (var entry in user.Permissions)
         {
