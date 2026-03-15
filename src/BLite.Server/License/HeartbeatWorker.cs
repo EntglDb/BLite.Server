@@ -28,6 +28,10 @@ public sealed class HeartbeatWorker : BackgroundService
     private readonly string                   _licenseFilePath;
     private readonly DateTime                 _startedAt = DateTime.UtcNow;
 
+    // Tracks the last time a heartbeat response was successfully received.
+    // Null = never succeeded since startup.
+    private DateTime? _lastSuccessfulHeartbeat;
+
     public HeartbeatWorker(
         IConfiguration cfg,
         LicenseManager license,
@@ -60,7 +64,6 @@ public sealed class HeartbeatWorker : BackgroundService
 
     private async Task SendHeartbeatAsync(CancellationToken ct)
     {
-
         try
         {
             var jwt = !string.IsNullOrEmpty(_licenseFilePath) && File.Exists(_licenseFilePath)
@@ -84,8 +87,11 @@ public sealed class HeartbeatWorker : BackgroundService
             if (!resp.IsSuccessStatusCode)
             {
                 _log.LogWarning("Heartbeat returned {Status}.", (int)resp.StatusCode);
+                ApplyLocalPolicy();
                 return;
             }
+
+            _lastSuccessfulHeartbeat = DateTime.UtcNow;
 
             var body = await resp.Content.ReadFromJsonAsync<HeartbeatResponseDto>(JsonOpts, ct);
             if (body?.Restrictions is { } r)
@@ -105,7 +111,7 @@ public sealed class HeartbeatWorker : BackgroundService
             }
             else
             {
-                // Hub returned no restrictions — clear any previously active ones
+                // Hub returned no restrictions — clear any previously active local policy
                 _restrictions.Update(RestrictionSnapshot.None);
             }
 
@@ -115,7 +121,32 @@ public sealed class HeartbeatWorker : BackgroundService
         catch (Exception ex)
         {
             _log.LogWarning("Heartbeat failed: {Msg}", ex.Message);
+            ApplyLocalPolicy();
         }
+    }
+
+    // ── Local policy ──────────────────────────────────────────────────────────
+
+    private void ApplyLocalPolicy()
+    {
+        // If a valid license is present, missed heartbeats are tolerated —
+        // the heartbeat is telemetry-only for licensed instances.
+        if (_license.Result == LicenseLoadResult.Ok)
+            return;
+
+        var missedDays = _lastSuccessfulHeartbeat.HasValue
+            ? (int)(DateTime.UtcNow - _lastSuccessfulHeartbeat.Value).TotalDays
+            : (int)(DateTime.UtcNow - _startedAt).TotalDays;
+
+        var snapshot = RestrictionService.FromMissedHeartbeatDays(missedDays);
+
+        if (snapshot.HasAny)
+            _log.LogWarning(
+                "Hub unreachable for {Days} day(s). Applying {Level} restrictions.",
+                missedDays,
+                missedDays >= 30 ? "SEVERE" : "MEDIUM-SEVERE");
+
+        _restrictions.Update(snapshot);
     }
 
     private static string GetVersion()

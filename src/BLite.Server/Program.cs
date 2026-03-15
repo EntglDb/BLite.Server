@@ -279,6 +279,30 @@ else
 if (app.Environment.IsDevelopment())
     app.MapGrpcReflectionService();
 
+// ── AGPL §13 compliance check ────────────────────────────────────────────────
+// If no SourceUrl is configured the server is violating AGPL-3.0 §13
+// (network use = distribution; source must be disclosed).
+// Apply severe restrictions immediately so the issue is hard to ignore.
+{
+    var configuredSourceUrl = app.Configuration.GetValue<string>("License:SourceUrl");
+    if (string.IsNullOrWhiteSpace(configuredSourceUrl))
+    {
+        var restrictions = app.Services.GetRequiredService<RestrictionService>();
+        restrictions.Update(new RestrictionSnapshot
+        {
+            OperationDelayMs  = 200,
+            QueryResultLimit  = 100,
+            DisableQueryCache = true,
+            WarnBannerMessage = "🚨 AGPL-3.0 §13 violation: License:SourceUrl is not configured. " +
+                                "Set LICENSE__SOURCEURL to a publicly accessible URL that serves the " +
+                                "source code of this running server. Severe restrictions are active.",
+        });
+        app.Logger.LogCritical(
+            "AGPL-3.0 §13 violation: License:SourceUrl is not set. " +
+            "Severe operational restrictions have been applied automatically.");
+    }
+}
+
 // Forward headers from reverse proxy (X-Forwarded-For, X-Forwarded-Proto, X-Forwarded-Host).
 // Required for correct host matching (RequireHost) and HTTPS detection when behind nginx/Plesk.
 app.UseForwardedHeaders(new ForwardedHeadersOptions
