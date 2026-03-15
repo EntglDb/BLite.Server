@@ -11,8 +11,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="BLite" Version="3.6.4" />
-    <PackageReference Include="BLite.SourceGenerators" Version="3.6.4">
+    <PackageReference Include="BLite" Version="3.6.6" />
+    <PackageReference Include="BLite.SourceGenerators" Version="3.6.6">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
