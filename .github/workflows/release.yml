@@ -22,9 +22,9 @@ permissions:
   packages: write   # push to ghcr.io
 
 jobs:
-  # ── NuGet package ───────────────────────────────────────────────────────────
+  # ── NuGet packages ──────────────────────────────────────────────────────────
   nuget-client:
-    name: Pack & Publish BLite.Client
+    name: Pack & Publish BLite.Client + BLite.Proto
     runs-on: ubuntu-latest
 
     steps:
@@ -42,6 +42,14 @@ jobs:
         with:
           dotnet-version: "10.0.x"
 
+      - name: Pack BLite.Proto
+        run: >
+          dotnet pack BLite.Server/src/BLite.Proto/BLite.Proto.csproj
+          --configuration Release
+          --output artifacts/nuget
+          -p:Version=${{ steps.version.outputs.version }}
+          --nologo
+
       - name: Pack BLite.Client
         run: >
           dotnet pack BLite.Server/src/BLite.Client/BLite.Client.csproj
@@ -49,6 +57,13 @@ jobs:
           --output artifacts/nuget
           -p:Version=${{ steps.version.outputs.version }}
           --nologo
+
+      - name: Publish BLite.Proto to NuGet.org
+        run: >
+          dotnet nuget push "artifacts/nuget/BLite.Proto.${{ steps.version.outputs.version }}.nupkg"
+          --source https://api.nuget.org/v3/index.json
+          --api-key ${{ secrets.NUGET_API_KEY }}
+          --skip-duplicate
 
       - name: Publish BLite.Client to NuGet.org
         run: >
