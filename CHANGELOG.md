@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="0.2.0"></a>
+## [0.2.0](https://www.github.com/EntglDb/BLite.Server/releases/tag/v0.2.0) (2026-03-16)
+
+### Features
+
+* automatic local restrictions for AGPL §13 and Hub unreachability ([17318aa](https://www.github.com/EntglDb/BLite.Server/commit/17318aa440bf8477bc894f3bf4fc2fcd13cd3be9))
+* server-side restriction system driven by LicenseHub heartbeat response ([00038f2](https://www.github.com/EntglDb/BLite.Server/commit/00038f2e67bdf514854cd5c777559e7b25c62895))
+
+### Bug Fixes
+
+* make heartbeat non-configurable, always enabled ([f45e0f4](https://www.github.com/EntglDb/BLite.Server/commit/f45e0f42a8724962c11a5691e2acf800cf9ff76c))
+* remove hardcoded internal OTLP endpoint from default config ([cbabc64](https://www.github.com/EntglDb/BLite.Server/commit/cbabc646d530853d265c098406ecb27b4a4b2011))
+
 <a name="0.1.7"></a>
 ## [0.1.7](https://www.github.com/EntglDb/BLite.Server/releases/tag/v0.1.7) (2026-03-15)
 
