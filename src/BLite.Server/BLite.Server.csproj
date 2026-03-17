@@ -44,7 +44,7 @@
 
   <ItemGroup>
     <!-- OS service integration (Windows Service + Linux systemd) -->
-    <PackageReference Include="BLite" Version="3.6.6" />
+    <PackageReference Include="BLite" Version="3.7.0" />
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.*" />
     <PackageReference Include="Microsoft.Extensions.Hosting.Systemd" Version="10.0.*" />
 
