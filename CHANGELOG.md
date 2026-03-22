@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="0.3.0"></a>
+## [0.3.0](https://www.github.com/EntglDb/BLite.Server/releases/tag/v0.3.0) (2026-03-22)
+
+### Features
+
+* upgrade to BLite 3.8 session transactions and multi-file layout ([c6338cf](https://www.github.com/EntglDb/BLite.Server/commit/c6338cf5430a88ff4857908ff22b8e8a2f758492))
+
 <a name="0.2.1"></a>
 ## [0.2.1](https://www.github.com/EntglDb/BLite.Server/releases/tag/v0.2.1) (2026-03-17)
 
