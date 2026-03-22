@@ -6,32 +6,49 @@ using Grpc.Core;
 namespace BLite.Server.Transactions;
 
 /// <summary>
-/// Represents a single server-managed transaction that is active
-/// for a specific <see cref="BLiteUser"/>.
+/// Represents a single server-managed transaction that is active for a specific
+/// <see cref="BLiteUser"/>.
+///
+/// <para>
+/// In BLite 3.8+ each active transaction is backed by a dedicated
+/// <see cref="BLiteSession"/> so concurrent transactions on the same database
+/// are fully isolated from one another without the need for a server-side semaphore.
+/// The session is disposed (auto-rolling back any uncommitted changes) when the
+/// <see cref="TransactionSession"/> is no longer needed.
+/// </para>
 /// </summary>
-public sealed class TransactionSession
+public sealed class TransactionSession : IDisposable
 {
     public string      TxnId      { get; }
     public BLiteUser   Owner      { get; }
-    /// <summary>The database (engine) this transaction is running against.</summary>
-    public string      DatabaseId { get; }  // canonical key: empty string = default
-    /// <summary>The resolved engine for this transaction.</summary>
-    public BLiteEngine Engine     { get; }
+    /// <summary>The database key this transaction is running against (empty = default).</summary>
+    public string      DatabaseId { get; }
+    /// <summary>The isolated session that owns this transaction context.</summary>
+    public BLiteSession Session   { get; }
 
     private DateTime _lastActivity;
     private readonly int _timeoutSeconds;
     private readonly ConcurrentBag<string> _dirtyCollections = [];
+    private bool _disposed;
 
     public TransactionSession(
         string txnId, BLiteUser owner, int timeoutSeconds,
-        string databaseId, BLiteEngine engine)
+        string databaseId, BLiteSession session)
     {
         TxnId           = txnId;
         Owner           = owner;
         DatabaseId      = databaseId;
-        Engine          = engine;
+        Session         = session;
         _timeoutSeconds = timeoutSeconds;
         _lastActivity   = DateTime.UtcNow;
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        // Disposing the BLiteSession auto-rolls back any uncommitted transaction.
+        Session.Dispose();
     }
 
     /// <summary>Returns true when the session has not been used within the configured timeout.</summary>

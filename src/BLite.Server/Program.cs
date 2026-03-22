@@ -65,7 +65,8 @@ builder.Services.AddSingleton(setupService);
 
 // EngineRegistry — manages system + tenant engines
 // The system engine hosts the _users collection; tenant engines live in DatabasesDirectory.
-var systemEngine = new BLiteEngine(dbPath, pageConfig);
+// All engines use the PageFileConfig.Server() multi-file layout.
+var systemEngine = new BLiteEngine(dbPath, PageFileConfig.Server(dbPath, pageConfig));
 var engineRegistry = new EngineRegistry(systemEngine, dbPath, databasesDir, pageConfig);
 engineRegistry.ScanDirectory();
 builder.Services.AddSingleton(engineRegistry);

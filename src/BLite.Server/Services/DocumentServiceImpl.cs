@@ -118,7 +118,7 @@ public sealed class DocumentServiceImpl : DocumentService.DocumentServiceBase
             if (!string.IsNullOrEmpty(request.TransactionId))
             {
                 var session = _txnManager.RequireSession(request.TransactionId, user);
-                id = await session.Engine.GetOrCreateCollection(col).InsertAsync(doc, context.CancellationToken);
+                id = await session.Session.GetOrCreateCollection(col).InsertAsync(doc, context.CancellationToken);
                 session.MarkDirty(col);
             }
             else
@@ -153,7 +153,7 @@ public sealed class DocumentServiceImpl : DocumentService.DocumentServiceBase
             if (!string.IsNullOrEmpty(request.TransactionId))
             {
                 var session = _txnManager.RequireSession(request.TransactionId, user);
-                ok = await session.Engine.GetOrCreateCollection(col).UpdateAsync(id, doc, context.CancellationToken);
+                ok = await session.Session.GetOrCreateCollection(col).UpdateAsync(id, doc, context.CancellationToken);
                 if (ok) session.MarkDirty(col);
             }
             else
@@ -186,7 +186,7 @@ public sealed class DocumentServiceImpl : DocumentService.DocumentServiceBase
             if (!string.IsNullOrEmpty(request.TransactionId))
             {
                 var session = _txnManager.RequireSession(request.TransactionId, user);
-                ok = await session.Engine.GetOrCreateCollection(col).DeleteAsync(id, context.CancellationToken);
+                ok = await session.Session.GetOrCreateCollection(col).DeleteAsync(id, context.CancellationToken);
                 if (ok) session.MarkDirty(col);
             }
             else
@@ -223,7 +223,7 @@ public sealed class DocumentServiceImpl : DocumentService.DocumentServiceBase
             if (!string.IsNullOrEmpty(request.TransactionId))
             {
                 var session = _txnManager.RequireSession(request.TransactionId, user);
-                ids = await session.Engine.GetOrCreateCollection(col).InsertBulkAsync(docs, context.CancellationToken);
+                ids = await session.Session.GetOrCreateCollection(col).InsertBulkAsync(docs, context.CancellationToken);
                 session.MarkDirty(col);
             }
             else

@@ -5,7 +5,6 @@
 // Permission checks are enforced by PermissionFilter before handlers run.
 // Errors are modelled with ErrorOr and mapped to RFC-9457 ProblemDetails.
 
-using System.IO.Compression;
 using BLite.Server.Auth;
 using BLite.Server.Caching;
 
@@ -101,26 +100,21 @@ internal static class RestApiDatabasesExtensions
                    string dbId,
                    CancellationToken ct) =>
             {
-                var realId = dbId.Equals("_system", StringComparison.OrdinalIgnoreCase) ? null : dbId;
-                var label = realId ?? "system";
-                var stamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
+                if (dbId.Equals("_system", StringComparison.OrdinalIgnoreCase))
+                    return Results.Problem(
+                        title: "Not Supported",
+                        detail: "The system database cannot be backed up via this endpoint.",
+                        statusCode: StatusCodes.Status400BadRequest);
+
+                var label   = dbId.Trim().ToLowerInvariant();
+                var stamp   = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
                 var zipName = $"blite-backup-{label}-{stamp}.zip";
-                var tempDb = Path.Combine(Path.GetTempPath(), $"blite-bkp-{Guid.NewGuid():N}.db");
+                var tempZip = Path.Combine(Path.GetTempPath(), $"blite-bkp-{Guid.NewGuid():N}.zip");
                 try
                 {
-                    var engine = registry.GetEngine(realId);
-                    await engine.BackupAsync(tempDb, ct);
+                    await registry.BackupAsync(dbId, tempZip, ct);
 
-                    var ms = new MemoryStream();
-                    using (var zip = new ZipArchive(ms, ZipArchiveMode.Create, leaveOpen: true))
-                    {
-                        var entry = zip.CreateEntry($"{label}.db", CompressionLevel.Fastest);
-                        await using var es = entry.Open();
-                        await using var fs = new FileStream(
-                            tempDb, FileMode.Open, FileAccess.Read, FileShare.None);
-                        await fs.CopyToAsync(es, ct);
-                    }
-                    ms.Position = 0;
+                    var ms = new MemoryStream(await File.ReadAllBytesAsync(tempZip, ct));
                     return Results.File(ms, "application/zip", zipName);
                 }
                 catch (InvalidOperationException ex)
@@ -132,10 +126,10 @@ internal static class RestApiDatabasesExtensions
                 }
                 finally
                 {
-                    if (File.Exists(tempDb)) File.Delete(tempDb);
+                    if (File.Exists(tempZip)) File.Delete(tempZip);
                 }
             })
             .WithSummary("Download a database backup")
-            .WithDescription("Performs a hot backup of the specified database and streams the result as a ZIP file. Use `_system` as `dbId` to target the default (system) database.");
+            .WithDescription("Archives all files of the specified tenant database into a ZIP and streams it for download. The database is briefly closed during archiving.");
     }
 }

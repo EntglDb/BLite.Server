@@ -12,8 +12,11 @@
 //     lazily on first access (GetEngine) or eagerly via ProvisionAsync.
 //   • Database IDs are normalised (trimmed + lowercased) before use as map keys
 //     so that "ACME" and "acme" always resolve to the same engine.
+//   • Every engine uses PageFileConfig.Server() layout: separate WAL file,
+//     .idx index file, and a per-collection directory under collections/<db>/.
 
 using System.Collections.Concurrent;
+using System.IO.Compression;
 using BLite.Core;
 using BLite.Core.Storage;
 
@@ -63,7 +66,8 @@ public sealed class EngineRegistry : IDisposable
     ///   Created automatically if it does not exist.
     /// </param>
     /// <param name="defaultPageConfig">
-    ///   Page-file configuration applied to all lazily-opened tenant engines.
+    ///   Base page-file configuration (page size, growth block, access mode).
+    ///   The registry wraps this in <see cref="PageFileConfig.Server"/> for every engine.
     /// </param>
     public EngineRegistry(
         BLiteEngine     systemEngine,
@@ -111,7 +115,7 @@ public sealed class EngineRegistry : IDisposable
                 $"Database '{key}' does not exist. " +
                 "Provision it first via AdminService.ProvisionTenant.");
 
-        return _active.GetOrAdd(key, _ => new BLiteEngine(dbPath, _defaultPageConfig));
+        return _active.GetOrAdd(key, _ => new BLiteEngine(dbPath, ResolveConfig(dbPath)));
     }
 
     /// <summary>The system (default) engine — hosts user metadata.</summary>
@@ -135,7 +139,8 @@ public sealed class EngineRegistry : IDisposable
             throw new InvalidOperationException($"Database '{key}' is already active.");
 
         var dbPath = GetDbPath(key);
-        var engine = new BLiteEngine(dbPath, _defaultPageConfig);
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        var engine = new BLiteEngine(dbPath, ResolveConfig(dbPath));
 
         if (!_active.TryAdd(key, engine))
         {
@@ -168,12 +173,53 @@ public sealed class EngineRegistry : IDisposable
 
         if (deleteFiles)
         {
-            var dbPath = GetDbPath(key);
-            if (File.Exists(dbPath))           File.Delete(dbPath);
-            if (File.Exists(dbPath + ".wal"))  File.Delete(dbPath + ".wal");
+            var dbDir = GetDbDirectory(key);
+            if (Directory.Exists(dbDir))
+                Directory.Delete(dbDir, recursive: true);
         }
 
         return Task.CompletedTask;
+    }
+
+    // ── Backup ───────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Creates a ZIP archive of all files belonging to the given tenant database.
+    /// The engine is briefly closed to release <c>FileShare.None</c> locks, the
+    /// tenant directory is archived, then the engine is reopened.  Any requests
+    /// that arrive while the engine is offline will observe a brief "database not
+    /// active" error; the window is limited to the ZIP creation time.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">
+    ///   When <paramref name="databaseId"/> is null/empty (system DB) or not active.
+    /// </exception>
+    public async Task BackupAsync(string databaseId, string targetZipPath, CancellationToken ct = default)
+    {
+        var key = Normalise(databaseId);
+        if (string.IsNullOrEmpty(key))
+            throw new InvalidOperationException("The system database cannot be backed up via this operation.");
+
+        var dbDir = GetDbDirectory(key);
+        if (!Directory.Exists(dbDir))
+            throw new InvalidOperationException($"Database '{key}' does not exist.");
+
+        // If the engine is currently open, close it first to release FileShare.None locks.
+        // If it is idle (never opened this session), nobody holds the files — zip directly.
+        var wasActive = _active.TryRemove(key, out var engine);
+        try
+        {
+            engine?.Dispose();
+            await Task.Run(() => ZipFile.CreateFromDirectory(dbDir, targetZipPath), ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (wasActive)
+            {
+                // Reopen only if it was open before — idle databases stay idle.
+                var dbPath = GetDbPath(key);
+                _active.TryAdd(key, new BLiteEngine(dbPath, ResolveConfig(dbPath)));
+            }
+        }
     }
 
     // ── Discovery ─────────────────────────────────────────────────────────────
@@ -202,10 +248,13 @@ public sealed class EngineRegistry : IDisposable
         if (string.IsNullOrEmpty(DatabasesDirectory) || !Directory.Exists(DatabasesDirectory))
             return result;
 
-        foreach (var file in Directory.GetFiles(DatabasesDirectory, "*.db"))
+        // Each tenant lives in its own subdirectory: DatabasesDirectory/<id>/<id>.db
+        foreach (var dir in Directory.GetDirectories(DatabasesDirectory))
         {
-            var id = Path.GetFileNameWithoutExtension(file).ToLowerInvariant();
-            result.Add(new TenantEntry(id, file, _active.ContainsKey(id)));
+            var id = Path.GetFileName(dir).ToLowerInvariant();
+            var dbFile = Path.Combine(dir, $"{id}.db");
+            if (File.Exists(dbFile))
+                result.Add(new TenantEntry(id, dbFile, _active.ContainsKey(id)));
         }
 
         return result;
@@ -250,15 +299,23 @@ public sealed class EngineRegistry : IDisposable
 
     // ── Internals ─────────────────────────────────────────────────────────────
 
-    private string GetDbPath(string key)
+    // Returns the PageFileConfig to use for an engine at the given path.
+    private PageFileConfig ResolveConfig(string dbPath)
+        => PageFileConfig.Server(dbPath, _defaultPageConfig);
+
+    // Returns the dedicated directory for a tenant database: DatabasesDirectory/<key>/
+    private string GetDbDirectory(string key)
     {
         if (string.IsNullOrEmpty(DatabasesDirectory))
             throw new InvalidOperationException(
                 "DatabasesDirectory is not configured. " +
                 "Add 'BLiteServer:DatabasesDirectory' to appsettings.json.");
 
-        return Path.Combine(DatabasesDirectory, $"{key}.db");
+        return Path.Combine(DatabasesDirectory, key);
     }
+
+    private string GetDbPath(string key)
+        => Path.Combine(GetDbDirectory(key), $"{key}.db");
 
     private static string Normalise(string? databaseId)
         => string.IsNullOrWhiteSpace(databaseId) ? DefaultKey

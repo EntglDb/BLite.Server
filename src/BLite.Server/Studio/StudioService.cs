@@ -92,38 +92,25 @@ public sealed class StudioService
         => await _registry.DeprovisionAsync(databaseId, deleteFiles);
 
     /// <summary>
-    /// Creates an in-memory ZIP backup of the specified database using a hot checkpoint-and-copy.
-    /// Pass <c>null</c> for the system database.
-    /// Returns the ZIP bytes and a timestamped filename.
+    /// Creates a ZIP backup of the given tenant database.  The engine is briefly
+    /// closed to release file locks, the directory is archived, then it is reopened.
+    /// Returns the raw ZIP bytes and a timestamped filename.
     /// </summary>
     public async Task<(byte[] Data, string FileName)> GetBackupAsync(
-        string? databaseId, CancellationToken ct = default)
+        string databaseId, CancellationToken ct = default)
     {
-        var engine  = _registry.GetEngine(databaseId);
-        var label   = string.IsNullOrWhiteSpace(databaseId) ? "system" : databaseId.Trim().ToLowerInvariant();
+        var label   = databaseId.Trim().ToLowerInvariant();
         var stamp   = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
         var zipName = $"blite-backup-{label}-{stamp}.zip";
-
-        // Write to a temp file so the engine can stream to it directly,
-        // then wrap into a ZIP for download.
-        var tempDb = Path.Combine(Path.GetTempPath(), $"blite-bkp-{Guid.NewGuid():N}.db");
+        var tempZip = Path.Combine(Path.GetTempPath(), $"blite-bkp-{Guid.NewGuid():N}.zip");
         try
         {
-            await engine.BackupAsync(tempDb, ct);
-
-            using var ms = new MemoryStream();
-            using (var zip = new ZipArchive(ms, ZipArchiveMode.Create, leaveOpen: true))
-            {
-                var entry = zip.CreateEntry($"{label}.db", CompressionLevel.Fastest);
-                await using var entryStream = entry.Open();
-                await using var fs = new FileStream(tempDb, FileMode.Open, FileAccess.Read, FileShare.None);
-                await fs.CopyToAsync(entryStream, ct);
-            }
-            return (ms.ToArray(), zipName);
+            await _registry.BackupAsync(databaseId, tempZip, ct);
+            return (await File.ReadAllBytesAsync(tempZip, ct), zipName);
         }
         finally
         {
-            if (File.Exists(tempDb)) File.Delete(tempDb);
+            if (File.Exists(tempZip)) File.Delete(tempZip);
         }
     }
 

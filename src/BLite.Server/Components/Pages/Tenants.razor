@@ -45,7 +45,7 @@
                             @onclick="() => Erase(t.DatabaseId)">
                         GDPR Erase
                     </button>
-                    <button class="btn btn-small" @onclick="() => Backup(t.DatabaseId)">
+                    <button class="btn btn-small" @onclick="() => RequestBackup(t.DatabaseId)">
                         ⬇ Backup
                     </button>
                 </td>
@@ -58,11 +58,37 @@
     </tbody>
 </table>
 
+@if (_backupPendingId != null)
+{
+    <div class="modal-backdrop">
+        <div class="modal">
+            <h3>⚠️ Database offline during backup</h3>
+            <p>
+                Backing up <strong class="mono">@_backupPendingId</strong> requires closing the
+                database engine to release exclusive file locks. All requests targeting this database
+                will fail until the backup completes.
+            </p>
+            <p>
+                For large databases this may take several seconds. Proceed only during a maintenance window.
+            </p>
+            <div class="toolbar" style="justify-content:flex-end">
+                <button class="btn" @onclick="CancelBackup">Cancel</button>
+                <button class="btn btn-primary" @onclick="ConfirmBackup"
+                        disabled="@_backupRunning">
+                    @(_backupRunning ? "Backing up…" : "Proceed")
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
 @code {
     private IReadOnlyList<TenantEntry> _tenants = [];
     private string _newId = "";
     private string _message = "";
     private bool _isError;
+    private string? _backupPendingId;
+    private bool _backupRunning;
 
     protected override void OnInitialized() => Refresh();
 
@@ -122,16 +148,39 @@
 
     private async Task Backup(string databaseId)
     {
+        _backupRunning = true;
         try
         {
             var (data, fileName) = await Studio.GetBackupAsync(databaseId);
             await JS.InvokeVoidAsync("studioDownload.saveAs", fileName, "application/zip",
                 Convert.ToBase64String(data));
+            _message = $"Backup of '{databaseId}' downloaded.";
+            _isError = false;
         }
         catch (Exception ex)
         {
             _message = ex.Message;
             _isError = true;
         }
+        finally
+        {
+            _backupRunning = false;
+            _backupPendingId = null;
+            Refresh();
+        }
+    }
+
+    private void RequestBackup(string databaseId)
+    {
+        _backupPendingId = databaseId;
+        _message = "";
+    }
+
+    private void CancelBackup() => _backupPendingId = null;
+
+    private Task ConfirmBackup()
+    {
+        var id = _backupPendingId!;
+        return Backup(id);
     }
 }
