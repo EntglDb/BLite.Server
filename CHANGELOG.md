@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="1.0.0"></a>
+## [1.0.0](https://www.github.com/EntglDb/BLite.Server/releases/tag/v1.0.0) (2026-03-23)
+
+### Features
+
+* **studio:** add server metrics dashboard with sparkline charts ([1870d6b](https://www.github.com/EntglDb/BLite.Server/commit/1870d6bc5f793890aa4557f212861ab1fd62299c))
+
+### Breaking Changes
+
+* **studio:** add server metrics dashboard with sparkline charts ([1870d6b](https://www.github.com/EntglDb/BLite.Server/commit/1870d6bc5f793890aa4557f212861ab1fd62299c))
+
 <a name="0.3.4"></a>
 ## [0.3.4](https://www.github.com/EntglDb/BLite.Server/releases/tag/v0.3.4) (2026-03-23)
 
