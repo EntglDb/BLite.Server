@@ -89,5 +89,6 @@ public sealed class TelemetryInterceptor : Interceptor
         };
         BLiteMetrics.RpcTotal.Add(1, tags);
         BLiteMetrics.RpcDuration.Record(elapsedMs, tags);
+        BLiteMetrics.IncrementRpcCounter();
     }
 }

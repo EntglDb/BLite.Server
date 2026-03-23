@@ -47,7 +47,7 @@ public sealed class RestrictionService
         DisableQueryCache = true,
         WarnBannerMessage = "🚨 Critical compliance issue detected. " +
                             "This server is subject to severe operational restrictions. " +
-                            "Contact support@blitedb.com.",
+                            "Contact info@blitedb.com.",
     };
 
     // ── State ────────────────────────────────────────────────────────────────

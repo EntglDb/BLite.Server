@@ -28,10 +28,26 @@ public sealed class QueryCacheService(
 
     public bool Enabled => _opts.Enabled && !restrictions.Current.DisableQueryCache;
 
+    // ── Hit/miss counters ─────────────────────────────────────────────────────
+
+    private long _hits;
+    private long _misses;
+
+    public long CacheHits   => Interlocked.Read(ref _hits);
+    public long CacheMisses => Interlocked.Read(ref _misses);
+
     // ── Read ──────────────────────────────────────────────────────────────────
 
-    public bool TryGet<T>(string key, out T? value) =>
-        cache.TryGetValue(key, out value);
+    public bool TryGet<T>(string key, out T? value)
+    {
+        if (cache.TryGetValue(key, out value))
+        {
+            Interlocked.Increment(ref _hits);
+            return true;
+        }
+        Interlocked.Increment(ref _misses);
+        return false;
+    }
 
     // ── Write ─────────────────────────────────────────────────────────────────
 

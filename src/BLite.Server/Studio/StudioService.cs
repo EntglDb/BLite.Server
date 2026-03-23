@@ -32,12 +32,14 @@ public sealed class StudioService
     private readonly AuthorizationService _authz;
     private readonly EmbeddingService    _embedding;
     private readonly EmbeddingQueuePopulator _populator;
+    private readonly ServerMetricsCollector _metrics;
     private readonly string _sourceUrl;
 
     public StudioService(EngineRegistry registry, UserRepository users,
         SetupService setup, ApiKeyValidator validator,
         AuthorizationService authz, EmbeddingService embedding,
-        EmbeddingQueuePopulator populator, IConfiguration config)
+        EmbeddingQueuePopulator populator, ServerMetricsCollector metrics,
+        IConfiguration config)
     {
         _registry  = registry;
         _users     = users;
@@ -46,6 +48,7 @@ public sealed class StudioService
         _authz     = authz;
         _embedding = embedding;
         _populator = populator;
+        _metrics   = metrics;
         _sourceUrl = config.GetValue<string>("License:SourceUrl")
                      ?? "https://github.com/blitedb/BLite.Server";
     }
@@ -80,7 +83,14 @@ public sealed class StudioService
         UserCount:     _users.ListAll().Count,
         DatabasesDir:  _registry.DatabasesDirectory,
         SourceUrl:     _sourceUrl);
+    // ── Metrics ──────────────────────────────────────────────────
 
+    /// <summary>Returns the most recent metrics snapshot, or <c>null</c> if not yet collected.</summary>
+    public MetricsSnapshot? GetServerMetrics() => _metrics.GetLatestSnapshot();
+
+    /// <summary>Returns up to <paramref name="count"/> historical snapshots in ascending order.</summary>
+    public IReadOnlyList<MetricsSnapshot> GetMetricsHistory(int count = 60)
+        => _metrics.GetHistory(count);
     // ── Tenants ───────────────────────────────────────────────────────────────
 
     public IReadOnlyList<TenantEntry> ListTenants() => _registry.ListTenants();
@@ -97,15 +107,15 @@ public sealed class StudioService
     /// Returns the raw ZIP bytes and a timestamped filename.
     /// </summary>
     public async Task<(byte[] Data, string FileName)> GetBackupAsync(
-        string databaseId, CancellationToken ct = default)
+        string? databaseId, CancellationToken ct = default)
     {
-        var label   = databaseId.Trim().ToLowerInvariant();
+        var label   = (databaseId ?? "system").Trim().ToLowerInvariant();
         var stamp   = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
         var zipName = $"blite-backup-{label}-{stamp}.zip";
         var tempZip = Path.Combine(Path.GetTempPath(), $"blite-bkp-{Guid.NewGuid():N}.zip");
         try
         {
-            await _registry.BackupAsync(databaseId, tempZip, ct);
+            await _registry.BackupAsync(databaseId ?? "", tempZip, ct);
             return (await File.ReadAllBytesAsync(tempZip, ct), zipName);
         }
         finally

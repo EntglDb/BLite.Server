@@ -31,6 +31,8 @@ public sealed class TransactionSession : IDisposable
     private readonly ConcurrentBag<string> _dirtyCollections = [];
     private bool _disposed;
 
+    public DateTimeOffset StartedAt { get; } = DateTimeOffset.UtcNow;
+
     public TransactionSession(
         string txnId, BLiteUser owner, int timeoutSeconds,
         string databaseId, BLiteSession session)

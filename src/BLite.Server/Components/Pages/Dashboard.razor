@@ -1,44 +1,220 @@
 @page "/"
 @inject StudioService Studio
 @inject IJSRuntime JS
+@implements IDisposable
+@using BLite.Server.Studio
 
 <h1>📊 Dashboard</h1>
 
-@if (_info is null)
+@if (_info is null && _snap is null)
 {
-    <p class="loading">Loading…</p>
+    <div class="loading-overlay">
+        <div class="loading-spinner"></div>
+        <span>Loading dashboard…</span>
+    </div>
 }
 else
 {
+    @* ── System ────────────────────────────────────────────────────────────── *@
+    <div class="metrics-section-title">System</div>
     <div class="card-grid">
-        <div class="card">
-            <div class="card-label">Engine Version</div>
-            <div class="card-value">@_info.Version</div>
+        @if (_info is not null)
+        {
+            <div class="card">
+                <div class="card-label">Engine Version</div>
+                <div class="card-value">@_info.Version</div>
+            </div>
+            <div class="card">
+                <div class="card-label">Uptime</div>
+                <div class="card-value">@FormatUptime(_info.Uptime)</div>
+            </div>
+            <div class="card">
+                <div class="card-label">Tenants</div>
+                <div class="card-value">@_info.TenantCount</div>
+            </div>
+            <div class="card">
+                <div class="card-label">Users</div>
+                <div class="card-value">@_info.UserCount</div>
+            </div>
+            <div class="card card-source full-width">
+                <div class="card-label">Source Code (AGPL-3.0 §13)</div>
+                <div class="card-value">
+                    <a href="@_info.SourceUrl" target="_blank" rel="noopener noreferrer" class="source-link">@_info.SourceUrl</a>
+                </div>
+            </div>
+        }
+    </div>
+
+    @if (_snap is null)
+    {
+        <div class="metrics-collecting">
+            <div class="loading-spinner"></div>
+            <span>Collecting first metrics… next sample in @ServerMetricsCollector.SampleIntervalSeconds s</span>
         </div>
-        <div class="card">
-            <div class="card-label">Uptime</div>
-            <div class="card-value">@FormatUptime(_info.Uptime)</div>
-        </div>
-        <div class="card">
-            <div class="card-label">Tenants</div>
-            <div class="card-value">@_info.TenantCount</div>
-        </div>
-        <div class="card">
-            <div class="card-label">Users</div>
-            <div class="card-value">@_info.UserCount</div>
-        </div>
-        <div class="card full-width">
-            <div class="card-label">Databases Directory</div>
-            <div class="card-value mono">@_info.DatabasesDir</div>
-        </div>
-        <div class="card full-width card-source">
-            <div class="card-label">Source Code (AGPL-3.0 §13)</div>
-            <div class="card-value">
-                <a href="@_info.SourceUrl" target="_blank" rel="noopener noreferrer" class="source-link">
-                    @_info.SourceUrl
-                </a>
+    }
+
+    @if (_snap is not null)
+    {
+        @* ── Process ──────────────────────────────────────────────────────── *@
+        <div class="metrics-section-title">Process</div>
+        <div class="card-grid">
+            <div class="card">
+                <div class="card-label">CPU</div>
+                <div class="card-value @CpuClass(_snap.CpuPercent)">@_snap.CpuPercent.ToString("F1") %</div>
+                <Sparkline Values="_history.Select(static s => s.CpuPercent).ToList()" Color="@CpuColor(_snap.CpuPercent)" />
+            </div>
+            <div class="card">
+                <div class="card-label">Working Set</div>
+                <div class="card-value">@FormatBytes(_snap.WorkingSetBytes)</div>
+                <Sparkline Values="_history.Select(static s => (double)s.WorkingSetBytes).ToList()" Color="var(--accent)" />
+            </div>
+            <div class="card">
+                <div class="card-label">Private Memory</div>
+                <div class="card-value">@FormatBytes(_snap.PrivateMemoryBytes)</div>
+            </div>
+            <div class="card">
+                <div class="card-label">Threads</div>
+                <div class="card-value">@_snap.ThreadCount</div>
             </div>
         </div>
+
+        @* ── GC / Runtime ──────────────────────────────────────────────────── *@
+        <div class="metrics-section-title">GC / Managed Runtime</div>
+        <div class="card-grid">
+            <div class="card">
+                <div class="card-label">Managed Heap</div>
+                <div class="card-value">@FormatBytes(_snap.ManagedHeapBytes)</div>
+            </div>
+            <div class="card">
+                <div class="card-label">Fragmented</div>
+                <div class="card-value @(_snap.GcFragmentedBytes > 50 * 1024 * 1024 ? "metric-warn" : "")">@FormatBytes(_snap.GcFragmentedBytes)</div>
+            </div>
+            <div class="card">
+                <div class="card-label">Gen 0 Collections</div>
+                <div class="card-value">@_snap.GcGen0</div>
+            </div>
+            <div class="card">
+                <div class="card-label">Gen 1 Collections</div>
+                <div class="card-value">@_snap.GcGen1</div>
+            </div>
+            <div class="card">
+                <div class="card-label">Gen 2 Collections</div>
+                <div class="card-value @(_snap.GcGen2 > 10 ? "metric-warn" : "")">@_snap.GcGen2</div>
+            </div>
+        </div>
+
+        @* ── Traffic ───────────────────────────────────────────────────────── *@
+        <div class="metrics-section-title">Traffic</div>
+        <div class="card-grid">
+            <div class="card">
+                <div class="card-label">Requests / sec</div>
+                <div class="card-value metric-ok">@_snap.RequestsPerSecond.ToString("F2")</div>
+                <Sparkline Values="_history.Select(static s => s.RequestsPerSecond).ToList()" Color="var(--green)" />
+            </div>
+            <div class="card">
+                <div class="card-label">Total Operations</div>
+                <div class="card-value">@_snap.RpcTotalOps.ToString("N0")</div>
+            </div>
+        </div>
+
+        @* ── Cache ─────────────────────────────────────────────────────────── *@
+        <div class="metrics-section-title">Query Cache</div>
+        @if (_snap.CacheHits == 0 && _snap.CacheMisses == 0)
+        {
+            <p class="subtitle" style="margin-bottom:16px">Cache disabled or no queries executed yet.</p>
+        }
+        else
+        {
+            <div class="card-grid">
+                <div class="card">
+                    <div class="card-label">Hit Ratio</div>
+                    <div class="card-value @HitRatioClass(_snap.CacheHitRatio)">@_snap.CacheHitRatio.ToString("F1") %</div>
+                    <Sparkline Values="_history.Select(static s => s.CacheHitRatio).ToList()" Color="@HitRatioColor(_snap.CacheHitRatio)" />
+                </div>
+                <div class="card">
+                    <div class="card-label">Cache Hits</div>
+                    <div class="card-value metric-ok">@_snap.CacheHits.ToString("N0")</div>
+                </div>
+                <div class="card">
+                    <div class="card-label">Cache Misses</div>
+                    <div class="card-value">@_snap.CacheMisses.ToString("N0")</div>
+                </div>
+            </div>
+        }
+
+        @* ── Active Transactions ───────────────────────────────────────────── *@
+        <div class="metrics-section-title">
+            Active Transactions
+            <span class="badge @(_snap.ActiveTransactions > 0 ? "badge-active" : "badge-idle")" style="margin-left:8px;font-size:12px">@_snap.ActiveTransactions</span>
+        </div>
+        @if (_snap.ActiveTransactions == 0)
+        {
+            <p class="subtitle" style="margin-bottom:16px">No active transactions.</p>
+        }
+        else
+        {
+            <div class="table-scroll" style="margin-bottom:20px">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Txn ID</th>
+                            <th>User</th>
+                            <th>Database</th>
+                            <th>Age</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var tx in _snap.ActiveTxList)
+                        {
+                            <tr>
+                                <td class="mono">@tx.TxnId…</td>
+                                <td>@tx.Username</td>
+                                <td>@tx.DatabaseId</td>
+                                <td class="@(tx.Age.TotalSeconds > 30 ? "metric-warn" : "")">@FormatAge(tx.Age)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+
+        @* ── Storage ───────────────────────────────────────────────────────── *@
+        <div class="metrics-section-title">Storage</div>
+        @if (_snap.Databases.Count == 0)
+        {
+            <p class="subtitle" style="margin-bottom:16px">No databases found.</p>
+        }
+        else
+        {
+            <div class="table-scroll" style="margin-bottom:20px">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Database</th>
+                            <th style="text-align:right">.db file</th>
+                            <th style="text-align:right">.wal file</th>
+                            <th style="text-align:right">Total</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var db in _snap.Databases)
+                        {
+                            <tr>
+                                <td>@db.Label</td>
+                                <td style="text-align:right" class="mono">@FormatBytes(db.FileSizeBytes)</td>
+                                <td style="text-align:right" class="mono">@FormatBytes(db.WalSizeBytes)</td>
+                                <td style="text-align:right" class="mono">@FormatBytes(db.FileSizeBytes + db.WalSizeBytes)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    }
+
+    @* ── Maintenance ──────────────────────────────────────────────────────── *@
+    <div class="metrics-section-title">Maintenance</div>
+    <div class="card-grid">
         <div class="card full-width">
             <div class="card-label">System Database Backup</div>
             <div class="card-value">
@@ -52,18 +228,43 @@ else
             </div>
         </div>
     </div>
+
+    <p class="subtitle" style="margin-top:-4px">
+        Last refresh: @_lastRefresh.ToString("HH:mm:ss") UTC
+        &nbsp;·&nbsp; Auto-refresh every @ServerMetricsCollector.SampleIntervalSeconds s
+    </p>
 }
 
 @code {
     private ServerInfo? _info;
+    private MetricsSnapshot? _snap;
+    private IReadOnlyList<MetricsSnapshot> _history = [];
     private bool   _backupRunning;
     private string _backupMessage = "";
     private bool   _backupError;
+    private DateTime _lastRefresh = DateTime.MinValue;
+    private Timer? _timer;
 
     protected override void OnInitialized()
     {
-        _info = Studio.GetServerInfo();
+        _info        = Studio.GetServerInfo();
+        _snap        = Studio.GetServerMetrics();
+        _history     = Studio.GetMetricsHistory();
+        _lastRefresh = DateTime.UtcNow;
+
+        _timer = new Timer(async _ =>
+        {
+            _info        = Studio.GetServerInfo();
+            _snap        = Studio.GetServerMetrics();
+            _history     = Studio.GetMetricsHistory();
+            _lastRefresh = DateTime.UtcNow;
+            await InvokeAsync(StateHasChanged);
+        }, (object?)null,
+        TimeSpan.FromSeconds(ServerMetricsCollector.SampleIntervalSeconds),
+        TimeSpan.FromSeconds(ServerMetricsCollector.SampleIntervalSeconds));
     }
+
+    public void Dispose() => _timer?.Dispose();
 
     private async Task BackupSystem()
     {
@@ -88,10 +289,43 @@ else
         }
     }
 
+    // ── Formatting helpers ────────────────────────────────────────────────────
+
     private static string FormatUptime(TimeSpan ts)
     {
         if (ts.TotalDays >= 1) return $"{(int)ts.TotalDays}d {ts.Hours}h {ts.Minutes}m";
         if (ts.TotalHours >= 1) return $"{(int)ts.TotalHours}h {ts.Minutes}m";
         return $"{(int)ts.TotalMinutes}m {ts.Seconds}s";
     }
+
+    private static string FormatBytes(long bytes)
+    {
+        if (bytes <= 0) return "0 B";
+        if (bytes >= 1024L * 1024 * 1024) return $"{bytes / (1024.0 * 1024 * 1024):F2} GB";
+        if (bytes >= 1024L * 1024)        return $"{bytes / (1024.0 * 1024):F1} MB";
+        if (bytes >= 1024L)               return $"{bytes / 1024.0:F1} KB";
+        return $"{bytes} B";
+    }
+
+    private static string FormatAge(TimeSpan age)
+    {
+        if (age.TotalHours >= 1)   return $"{(int)age.TotalHours}h {age.Minutes}m";
+        if (age.TotalMinutes >= 1) return $"{(int)age.TotalMinutes}m {age.Seconds}s";
+        return $"{(int)age.TotalSeconds}s";
+    }
+
+    // ── CSS helpers ───────────────────────────────────────────────────────────
+
+    private static string CpuClass(double pct) =>
+        pct >= 80 ? "metric-crit" : pct >= 50 ? "metric-warn" : "metric-ok";
+
+    private static string CpuColor(double pct) =>
+        pct >= 80 ? "var(--red)" : pct >= 50 ? "var(--orange)" : "var(--green)";
+
+    private static string HitRatioClass(double pct) =>
+        pct >= 70 ? "metric-ok" : pct >= 40 ? "metric-warn" : "metric-crit";
+
+    private static string HitRatioColor(double pct) =>
+        pct >= 70 ? "var(--green)" : pct >= 40 ? "var(--orange)" : "var(--red)";
 }
+

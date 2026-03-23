@@ -196,6 +196,12 @@ builder.Services.AddMemoryCache(opts =>
 });
 builder.Services.AddSingleton<QueryCacheService>();
 
+// Server metrics collector — always-on singleton + background service.
+// Samples process/GC/traffic/cache/storage metrics and persists to system KV with TTL.
+builder.Services.AddSingleton<BLite.Server.Studio.ServerMetricsCollector>();
+builder.Services.AddHostedService(sp =>
+    sp.GetRequiredService<BLite.Server.Studio.ServerMetricsCollector>());
+
 // ── Studio (Blazor Server on separate port) ──────────────────────────────────
 var studioEnabled = builder.Configuration.GetValue<bool?>("Studio:Enabled") ?? false;
 if (studioEnabled)

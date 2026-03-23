@@ -156,6 +156,20 @@ public sealed class TransactionManager : IAsyncDisposable
     }
 
     /// <summary>
+    /// Returns a point-in-time snapshot of all active sessions for the metrics dashboard.
+    /// Each entry contains the abbreviated transaction ID, the owning username,
+    /// the canonical database identifier, and when the transaction started.
+    /// </summary>
+    public IReadOnlyList<(string TxnId, string Username, string DatabaseId, DateTimeOffset StartedAt)> GetActiveSessionsSnapshot()
+        => _sessions.Values
+            .Select(s => (
+                s.TxnId.Length > 8 ? s.TxnId[..8] : s.TxnId,
+                s.Owner.Username,
+                string.IsNullOrEmpty(s.DatabaseId) ? "(default)" : s.DatabaseId,
+                s.StartedAt))
+            .ToList();
+
+    /// <summary>
     /// Returns true if there is an active transaction on the given database.
     /// </summary>
     public bool HasActiveTransaction(string? dbId)

@@ -48,4 +48,16 @@ public static class BLiteMetrics
             "blite.server.active_transactions",
             unit: "transactions",
             description: "Currently active user-scoped transactions");
+
+    // ── In-process readable counter ───────────────────────────────────────────
+    // OTel Counter<T> is write-only; we keep a parallel plain field so the
+    // metrics dashboard can compute requests/second without an OTel reader.
+
+    private static long _rpcCountInternal;
+
+    /// <summary>Returns the total number of gRPC operations handled since process start.</summary>
+    public static long ReadRpcTotal() => Interlocked.Read(ref _rpcCountInternal);
+
+    /// <summary>Increments the in-process gRPC operation counter. Called by <see cref="TelemetryInterceptor"/>.</summary>
+    public static void IncrementRpcCounter() => Interlocked.Increment(ref _rpcCountInternal);
 }

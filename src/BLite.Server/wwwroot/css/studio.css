@@ -223,6 +223,69 @@ h2 { font-size: 17px; font-weight: 600; margin-bottom: 12px; }
     font-weight: 600;
 }
 
+/* ── Metrics (dashboard) ─────────────────────────────────────────────────── */
+
+.metrics-section-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: .7px;
+    margin: 20px 0 10px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+}
+
+.metric-ok   { color: var(--green);  }
+.metric-warn { color: var(--orange); }
+.metric-crit { color: var(--red);    }
+
+.metric-bar-track {
+    height: 4px;
+    background: var(--bg-hover);
+    border-radius: 2px;
+    margin-top: 8px;
+    overflow: hidden;
+}
+
+.metric-bar {
+    height: 4px;
+    border-radius: 2px;
+    transition: width .4s ease;
+}
+
+.metric-bar.metric-ok   { background: var(--green);  }
+.metric-bar.metric-warn { background: var(--orange); }
+.metric-bar.metric-crit { background: var(--red);    }
+
+/* ── Sparkline ───────────────────────────────────────────────────────────── */
+.sparkline      { display: block; margin-top: 10px; overflow: visible; }
+
+/* ── Loading spinner ─────────────────────────────────────────────────────── */
+@keyframes blite-spin { to { transform: rotate(360deg); } }
+
+.loading-spinner {
+    width: 32px; height: 32px;
+    border: 3px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: blite-spin .8s linear infinite;
+    margin: 0 auto;
+}
+.loading-overlay {
+    display: flex; flex-direction: column; align-items: center;
+    gap: 16px; padding: 60px 0; color: var(--text-dim); font-size: 14px;
+}
+.metrics-collecting {
+    display: flex; align-items: center; gap: 12px;
+    padding: 16px 20px; color: var(--text-dim); font-size: 13px;
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: var(--radius); margin-bottom: 20px;
+}
+.metrics-collecting .loading-spinner { width: 20px; height: 20px; border-width: 2px; margin: 0; }
+
 /* ── Tables ─────────────────────────────────────────────────────────────── */
 
 .table-scroll { overflow-x: auto; }

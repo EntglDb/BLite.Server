@@ -1,0 +1,94 @@
+@* BLite Studio — Sparkline chart (pure inline SVG, no external JS/CSS dependencies)
+   Copyright (C) 2026 Luca Fabbri — AGPL-3.0 *@
+@{
+    const int W    = 220;
+    const int PadH = 1;   // horizontal padding (px)
+    const int PadT = 3;   // top padding (avoids clipping stroke)
+    const int PadB = 4;   // bottom padding
+
+    string linePath = "";
+    string areaPath = "";
+
+    if (Values is { Count: >= 2 })
+    {
+        double min   = Values.Min();
+        double max   = Values.Max();
+        double range = max - min;
+        int    n     = Values.Count;
+
+        var pts = new (double X, double Y)[n];
+        for (int i = 0; i < n; i++)
+        {
+            double x    = PadH + i * (W - 2.0 * PadH) / (n - 1);
+            double norm = range > 0 ? (Values[i] - min) / range : 0.5;
+            double y    = PadT + (Height - PadT - PadB) * (1.0 - norm);
+            pts[i]      = (x, y);
+        }
+
+        var sb = new System.Text.StringBuilder();
+        sb.Append(FormattableString.Invariant($"M {pts[0].X:F1},{pts[0].Y:F1}"));
+        for (int i = 1; i < pts.Length; i++)
+            sb.Append(FormattableString.Invariant($" L {pts[i].X:F1},{pts[i].Y:F1}"));
+        linePath = sb.ToString();
+
+        sb.Clear();
+        sb.Append(FormattableString.Invariant($"M {pts[0].X:F1},{Height - PadB}"));
+        sb.Append(FormattableString.Invariant($" L {pts[0].X:F1},{pts[0].Y:F1}"));
+        for (int i = 1; i < pts.Length; i++)
+            sb.Append(FormattableString.Invariant($" L {pts[i].X:F1},{pts[i].Y:F1}"));
+        sb.Append(FormattableString.Invariant($" L {pts[^1].X:F1},{Height - PadB} Z"));
+        areaPath = sb.ToString();
+    }
+    else if (Values is { Count: 1 })
+    {
+        double midY = Height / 2.0;
+        linePath = FormattableString.Invariant($"M {PadH},{midY:F1} L {W - PadH},{midY:F1}");
+    }
+}
+
+<svg class="sparkline @CssClass"
+     viewBox="0 0 @W @Height"
+     width="100%"
+     height="@Height"
+     preserveAspectRatio="none"
+     xmlns="http://www.w3.org/2000/svg">
+    <defs>
+        <linearGradient id="@_gradId" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%"   stop-color="@Color" stop-opacity="0.35" />
+            <stop offset="100%" stop-color="@Color" stop-opacity="0.03" />
+        </linearGradient>
+    </defs>
+    @if (!string.IsNullOrEmpty(areaPath))
+    {
+        <path d="@areaPath" fill="url(#@_gradId)" />
+    }
+    @if (!string.IsNullOrEmpty(linePath))
+    {
+        <path d="@linePath"
+              stroke="@Color"
+              stroke-width="1.5"
+              fill="none"
+              stroke-linecap="round"
+              stroke-linejoin="round" />
+    }
+</svg>
+
+@code {
+    /// <summary>Time-ordered data points to plot.</summary>
+    [Parameter] public IReadOnlyList<double>? Values { get; set; }
+
+    /// <summary>Stroke and fill color — accepts any CSS color or variable.</summary>
+    [Parameter] public string Color { get; set; } = "var(--accent)";
+
+    /// <summary>Chart height in pixels (width always fills its container).</summary>
+    [Parameter] public int Height { get; set; } = 44;
+
+    /// <summary>Additional CSS class on the &lt;svg&gt; element.</summary>
+    [Parameter] public string? CssClass { get; set; }
+
+    private static int _counter;
+    private string _gradId = "sg0";
+
+    protected override void OnInitialized()
+        => _gradId = $"sg{System.Threading.Interlocked.Increment(ref _counter)}";
+}
