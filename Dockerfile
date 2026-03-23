@@ -28,6 +28,14 @@ RUN dotnet publish BLite.Server/src/BLite.Server/BLite.Server.csproj \
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 WORKDIR /app
 
+# Update CA certificates so Let's Encrypt intermediate certs are trusted.
+# Without this, outbound HTTPS calls (e.g. LicenseHub heartbeat) fail with
+# PartialChain on minimal Debian images.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && update-ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
 # Copy the self-contained publish output
 COPY --from=build /app/publish ./
 
@@ -63,8 +71,8 @@ ENV BLITESERVER__MAXPAGESIZEBYTES=16384
 # License management
 # AGPLv3 §13 source disclosure URL (override if you self-host a fork)
 ENV LICENSE__SOURCEURL=https://github.com/EntglDb/BLite.Server
-# URL of the BLite License Hub (for commercial license validation)
-ENV LICENSE__HUBURL=https://licensehub.blitedb.com
+# URL of the BLite License Hub API (for commercial license validation)
+ENV LICENSE__HUBURL=https://api.licensehub.blitedb.com
 # Path to a license file on disk (leave empty to use Hub-based validation)
 ENV LICENSE__FILEPATH=
 # PEM-encoded public key used to verify offline license files (leave empty for Hub validation)

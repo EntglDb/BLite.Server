@@ -26,6 +26,7 @@ public sealed class HeartbeatWorker : BackgroundService
     private readonly RestrictionService       _restrictions;
     private readonly string                   _hubUrl;
     private readonly string                   _licenseFilePath;
+    private readonly string                   _sourceUrl;
     private readonly DateTime                 _startedAt = DateTime.UtcNow;
 
     // Tracks the last time a heartbeat response was successfully received.
@@ -45,8 +46,9 @@ public sealed class HeartbeatWorker : BackgroundService
         _instance        = instance;
         _httpFactory     = httpFactory;
         _restrictions    = restrictions;
-        _hubUrl          = cfg.GetValue<string>("License:HubUrl")   ?? "https://licensehub.blitedb.com";
-        _licenseFilePath = cfg.GetValue<string>("License:FilePath") ?? string.Empty;
+        _hubUrl          = cfg.GetValue<string>("License:HubUrl")    ?? "https://licensehub.blitedb.com";
+        _licenseFilePath = cfg.GetValue<string>("License:FilePath")  ?? string.Empty;
+        _sourceUrl       = cfg.GetValue<string>("License:SourceUrl") ?? "https://github.com/EntglDb/BLite.Server";
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -71,13 +73,13 @@ public sealed class HeartbeatWorker : BackgroundService
                 : string.Empty;
 
             var payload = new HeartbeatPayload(
-                InstanceId:     _instance.InstanceId,
-                LicenseJwt:     jwt,
-                ServerVersion:  GetVersion(),
-                OperatingSystem: RuntimeInformation.OSDescription,
-                Architecture:    RuntimeInformation.OSArchitecture.ToString(),
-                UptimeSeconds:  (long)(DateTime.UtcNow - _startedAt).TotalSeconds,
-                TotalRequests:  0);
+                InstanceId:    _instance.InstanceId,
+                Version:       GetVersion(),
+                LicenseToken:  string.IsNullOrEmpty(jwt) ? null : jwt,
+                Hostname:      RuntimeInformation.OSDescription,
+                SourceUrl:     _sourceUrl,
+                DatabaseCount: 0,
+                RequestCount:  0);
 
             using var client = _httpFactory.CreateClient("heartbeat");
             var resp = await client.PostAsJsonAsync(
@@ -169,12 +171,12 @@ public sealed class HeartbeatWorker : BackgroundService
     }
 
     private sealed record HeartbeatPayload(
-        string InstanceId,
-        string LicenseJwt,
-        string ServerVersion,
-        string OperatingSystem,
-        string Architecture,
-        long   UptimeSeconds,
-        long   TotalRequests);
+        string  InstanceId,
+        string  Version,
+        string? LicenseToken,
+        string? Hostname,
+        string? SourceUrl,
+        int     DatabaseCount,
+        long    RequestCount);
 }
 
