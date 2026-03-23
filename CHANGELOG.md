@@ -2,6 +2,9 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="0.3.4"></a>
+## [0.3.4](https://www.github.com/EntglDb/BLite.Server/releases/tag/v0.3.4) (2026-03-23)
+
 <a name="0.3.3"></a>
 ## [0.3.3](https://www.github.com/EntglDb/BLite.Server/releases/tag/v0.3.3) (2026-03-23)
 

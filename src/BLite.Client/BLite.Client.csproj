@@ -9,7 +9,7 @@
     <RootNamespace>BLite.Client</RootNamespace>
     <AssemblyName>BLite.Client</AssemblyName>
 
-    <Version>0.3.3</Version>
+    <Version>0.3.4</Version>
     <AssemblyVersion>0.1.4.0</AssemblyVersion>
     <FileVersion>0.1.4.0</FileVersion>
     <Authors>BLite Team</Authors>
