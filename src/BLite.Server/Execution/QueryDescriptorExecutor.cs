@@ -7,6 +7,7 @@
 
 using BLite.Bson;
 using BLite.Core;
+using BLite.Core.Indexing;
 using BLite.Proto;
 
 namespace BLite.Server.Execution;
@@ -24,15 +25,38 @@ public static class QueryDescriptorExecutor
     {
         var collection = engine.GetOrCreateCollection(descriptor.Collection);
 
-        // Build an optional predicate from the WHERE clause
-        Func<BsonDocument, bool>? predicate = descriptor.Where is not null
-            ? FilterNodeCompiler.Compile(descriptor.Where)
-            : null;
+        // Build predicate and source — prefer index seek for simple equality filters.
+        Func<BsonDocument, bool>? predicate = null;
+        IAsyncEnumerable<BsonDocument> source;
 
-        // Determine the raw source sequence
-        IAsyncEnumerable<BsonDocument> source = predicate is not null
-            ? collection.FindAsync(predicate, ct)
-            : collection.FindAllAsync(ct);
+        if (descriptor.Where is BinaryFilter { Op: FilterOp.Eq } eq && !eq.Field.Contains('.'))
+        {
+            // Look for a BTree index on this field; if one exists, use a point-lookup
+            // instead of a full-collection scan.
+            var btreeIdx = engine.GetIndexDescriptors(descriptor.Collection)
+                .FirstOrDefault(d => d.Type == IndexType.BTree && d.FieldPath == eq.Field);
+
+            if (btreeIdx is not null)
+            {
+                var key = ScalarToObject(eq.Value);
+                source = SyncToAsync(collection.QueryIndex(btreeIdx.Name, key, key), ct);
+                // predicate stays null — index equality scan is already exact
+            }
+            else
+            {
+                predicate = FilterNodeCompiler.Compile(descriptor.Where);
+                source = collection.FindAsync(predicate, ct);
+            }
+        }
+        else
+        {
+            predicate = descriptor.Where is not null
+                ? FilterNodeCompiler.Compile(descriptor.Where)
+                : null;
+            source = predicate is not null
+                ? collection.FindAsync(predicate, ct)
+                : collection.FindAllAsync(ct);
+        }
 
         // Apply ORDER BY (in-memory post-scan, same as BTreeQueryProvider standard path)
         IEnumerable<BsonDocument>? sorted = null;
@@ -121,4 +145,30 @@ public static class QueryDescriptorExecutor
         BsonType.Document   => v.AsDocument,   // nested: traversal continues
         _                   => null
     };
+
+    /// <summary>Converts a <see cref="ScalarValue"/> to a CLR object suitable as a BTree index key.</summary>
+    private static object? ScalarToObject(ScalarValue v) => v.Kind switch
+    {
+        ScalarKind.Null     => null,
+        ScalarKind.Bool     => v.BoolVal,
+        ScalarKind.Int32    => v.Int32Val,
+        ScalarKind.Int64    => v.Int64Val,
+        ScalarKind.Double   => v.DoubleVal,
+        ScalarKind.Decimal  => v.DecimalVal,
+        ScalarKind.String   => v.StringVal,
+        ScalarKind.DateTime => v.DateTimeVal,
+        ScalarKind.Guid     => v.GuidVal,
+        _                   => null
+    };
+
+    private static async IAsyncEnumerable<BsonDocument> SyncToAsync(
+        IEnumerable<BsonDocument> source,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        foreach (var doc in source)
+        {
+            ct.ThrowIfCancellationRequested();
+            yield return doc;
+        }
+    }
 }

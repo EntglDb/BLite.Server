@@ -104,6 +104,9 @@ public class CrudBenchmarks
             new CreateIndexModel<MongoBsonDoc>(
                 Builders<MongoBsonDoc>.IndexKeys.Ascending("category")));
 
+        // Matching BTree index on BLite so the query benchmark is apples-to-apples.
+        await _bliteCol.CreateIndexAsync("category");
+
         // ── Seed: 1 000 documents (200 per category) ──────────────────────────
         // Ensures the query benchmark returns real rows from both engines.
         await SeedManyAsync(1_000);
