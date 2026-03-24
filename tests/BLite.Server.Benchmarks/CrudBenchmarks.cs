@@ -139,20 +139,25 @@ public class CrudBenchmarks
 
     // ── Insert (single) ───────────────────────────────────────────────────────
 
-    [BenchmarkCategory("Insert-1"), Benchmark(Baseline = true, Description = "BLite gRPC")]
+    // InvocationCount=1: each call appends a document, so multiple invocations
+    // per iteration would grow the collection and bias the measurement.
+    [BenchmarkCategory("Insert-1"), Benchmark(Baseline = true, Description = "BLite gRPC"), InvocationCount(1)]
     public async Task InsertOne_BLite()
     {
         var doc = await MakeBLiteDocAsync("bench-insert", "electronics", 9.99, 100);
         await _bliteCol.InsertAsync(doc);
     }
 
-    [BenchmarkCategory("Insert-1"), Benchmark(Description = "MongoDB")]
+    [BenchmarkCategory("Insert-1"), Benchmark(Description = "MongoDB"), InvocationCount(1)]
     public Task InsertOne_Mongo()
         => _mongoCol.InsertOneAsync(MakeMongoDoc("bench-insert", "electronics", 9.99, 100));
 
     // ── Insert (bulk) ─────────────────────────────────────────────────────────
 
-    [BenchmarkCategory("InsertBulk"), Benchmark(Baseline = true, Description = "BLite gRPC")]
+    // InvocationCount=1 prevents BDN from running multiple calls per iteration:
+    // each call permanently adds BulkSize docs to the collection, so self-
+    // contamination would bias later iterations upward.
+    [BenchmarkCategory("InsertBulk"), Benchmark(Baseline = true, Description = "BLite gRPC"), InvocationCount(1)]
     public async Task InsertBulk_BLite()
     {
         var docs = new BLiteBsonDoc[BulkSize];
@@ -161,7 +166,7 @@ public class CrudBenchmarks
         await _bliteCol.InsertBulkAsync(docs);
     }
 
-    [BenchmarkCategory("InsertBulk"), Benchmark(Description = "MongoDB")]
+    [BenchmarkCategory("InsertBulk"), Benchmark(Description = "MongoDB"), InvocationCount(1)]
     public async Task InsertBulk_Mongo()
     {
         var docs = new List<MongoBsonDoc>(BulkSize);
