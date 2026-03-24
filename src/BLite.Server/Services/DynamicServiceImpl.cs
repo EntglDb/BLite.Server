@@ -102,7 +102,7 @@ public sealed class DynamicServiceImpl : DynamicService.DynamicServiceBase
 
             return new DocumentResponse
             {
-                BsonPayload = ByteString.CopyFrom(BsonPayloadSerializer.Serialize(doc)),
+                BsonPayload = UnsafeByteOperations.UnsafeWrap(BsonPayloadSerializer.Serialize(doc)),
                 Found       = true
             };
         }
@@ -207,13 +207,13 @@ public sealed class DynamicServiceImpl : DynamicService.DynamicServiceBase
         var ct     = context.CancellationToken;
 
         var cacheKey = QueryCacheKeys.GrpcQuery(user.DatabaseId, col,
-                                                request.QueryDescriptor.ToByteArray());
+                                                request.QueryDescriptor.Span);
 
         if (_cache.Enabled && _cache.TryGet(cacheKey, out List<byte[]>? cachedPayloads))
         {
             foreach (var payload in cachedPayloads!)
                 await responseStream.WriteAsync(
-                    new DocumentResponse { BsonPayload = ByteString.CopyFrom(payload), Found = true },
+                    new DocumentResponse { BsonPayload = UnsafeByteOperations.UnsafeWrap(payload), Found = true },
                     ct);
             return;
         }
@@ -224,7 +224,7 @@ public sealed class DynamicServiceImpl : DynamicService.DynamicServiceBase
             var payload = BsonPayloadSerializer.Serialize(doc);
             payloads.Add(payload);
             await responseStream.WriteAsync(
-                new DocumentResponse { BsonPayload = ByteString.CopyFrom(payload), Found = true },
+                new DocumentResponse { BsonPayload = UnsafeByteOperations.UnsafeWrap(payload), Found = true },
                 ct);
         }
 
@@ -366,7 +366,7 @@ public sealed class DynamicServiceImpl : DynamicService.DynamicServiceBase
                 context.CancellationToken.ThrowIfCancellationRequested();
                 var payload = BsonPayloadSerializer.Serialize(doc);
                 await responseStream.WriteAsync(
-                    new DocumentResponse { BsonPayload = ByteString.CopyFrom(payload), Found = true },
+                    new DocumentResponse { BsonPayload = UnsafeByteOperations.UnsafeWrap(payload), Found = true },
                     context.CancellationToken);
             }
         }
@@ -515,7 +515,7 @@ public sealed class DynamicServiceImpl : DynamicService.DynamicServiceBase
                 if (emitted >= take) break;
                 var payload = BsonPayloadSerializer.Serialize(doc);
                 await responseStream.WriteAsync(
-                    new DocumentResponse { BsonPayload = ByteString.CopyFrom(payload), Found = true }, ct);
+                    new DocumentResponse { BsonPayload = UnsafeByteOperations.UnsafeWrap(payload), Found = true }, ct);
                 emitted++;
             }
         }

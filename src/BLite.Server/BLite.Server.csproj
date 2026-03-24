@@ -57,6 +57,8 @@
     <!-- MessagePack for QueryDescriptor deserialization -->
     <PackageReference Include="MessagePack" Version="3.1.4" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.*" />
+    <!-- Fast non-cryptographic hashing for query cache keys -->
+    <PackageReference Include="System.IO.Hashing" Version="9.0.*" />
     <!-- Embedding: ONNX inference + HuggingFace tokenizer -->
     <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.24.4" />
     <PackageReference Include="Microsoft.ML.Tokenizers" Version="2.0.0" />

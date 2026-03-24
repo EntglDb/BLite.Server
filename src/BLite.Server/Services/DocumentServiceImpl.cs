@@ -75,13 +75,13 @@ public sealed class DocumentServiceImpl : DocumentService.DocumentServiceBase
         var ct       = context.CancellationToken;
 
         var cacheKey = QueryCacheKeys.GrpcQuery(user.DatabaseId, col,
-                                                request.QueryDescriptor.ToByteArray());
+                                                request.QueryDescriptor.Span);
 
         if (_cache.Enabled && _cache.TryGet(cacheKey, out List<byte[]>? cachedPayloads))
         {
             foreach (var payload in cachedPayloads!)
                 await responseStream.WriteAsync(
-                    new TypedDocumentResponse { BsonPayload = ByteString.CopyFrom(payload), TypeName = typeName },
+                    new TypedDocumentResponse { BsonPayload = UnsafeByteOperations.UnsafeWrap(payload), TypeName = typeName },
                     ct);
             return;
         }
@@ -93,7 +93,7 @@ public sealed class DocumentServiceImpl : DocumentService.DocumentServiceBase
             payloads.Add(payload);
             var response = new TypedDocumentResponse
             {
-                BsonPayload = ByteString.CopyFrom(payload),
+                BsonPayload = UnsafeByteOperations.UnsafeWrap(payload),
                 TypeName    = typeName
             };
             await responseStream.WriteAsync(response, ct);

@@ -26,6 +26,19 @@ using Scalar.AspNetCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Pre-warm the thread pool to avoid the 2-threads/sec ramp-up after idle periods.
+// Without this, burst traffic can queue for hundreds of milliseconds while the pool grows.
+ThreadPool.SetMinThreads(50, 50);
+
+// Tune HTTP/2 flow control windows: larger windows reduce round-trips in high-throughput
+// gRPC streaming and bulk-insert workloads.
+builder.WebHost.ConfigureKestrel(k =>
+{
+    k.Limits.Http2.MaxStreamsPerConnection     = 200;
+    k.Limits.Http2.InitialConnectionWindowSize = 1 * 1024 * 1024;  // 1 MB
+    k.Limits.Http2.InitialStreamWindowSize    = 512 * 1024;         // 512 KB
+});
+
 // Support running as a Windows Service or a Linux systemd daemon.
 // These calls are safe no-ops when the process is not managed by the respective supervisor.
 builder.Host.UseWindowsService();

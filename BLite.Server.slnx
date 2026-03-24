@@ -13,5 +13,6 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/BLite.Client.IntegrationTests/BLite.Client.IntegrationTests.csproj" />
+    <Project Path="tests/BLite.Server.Benchmarks/BLite.Server.Benchmarks.csproj" />
   </Folder>
 </Solution>

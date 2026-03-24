@@ -1,7 +1,7 @@
 // BLite.Server — Cache key builders
 // Copyright (C) 2026 Luca Fabbri — AGPL-3.0
 
-using System.Security.Cryptography;
+using System.IO.Hashing;
 using System.Text;
 
 namespace BLite.Server.Caching;
@@ -31,8 +31,10 @@ public static class QueryCacheKeys
         => $"blql-count:{N(dbId)}:{collection}:{Hash(body)}";
 
     // gRPC — Query (bytes are the serialized QueryDescriptor)
-    public static string GrpcQuery(string? dbId, string collection, byte[] descriptorBytes)
-        => $"grpc:{N(dbId)}:{collection}:{HashBytes(descriptorBytes)}";
+    // Accepts ReadOnlySpan<byte> so the caller can pass ByteString.Span directly,
+    // avoiding the ByteString.ToByteArray() allocation on every request.
+    public static string GrpcQuery(string? dbId, string collection, ReadOnlySpan<byte> descriptorBytes)
+        => $"grpc:{N(dbId)}:{collection}:{XxHash64.HashToUInt64(descriptorBytes):x16}";
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -41,13 +43,15 @@ public static class QueryCacheKeys
 
     private static string Hash(string input)
     {
-        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(input ?? string.Empty));
-        return Convert.ToHexString(bytes)[..16]; // first 64 bits is enough for a cache key
-    }
-
-    private static string HashBytes(byte[] input)
-    {
-        var bytes = SHA256.HashData(input);
-        return Convert.ToHexString(bytes)[..16];
+        // XxHash64 is ~5–10× faster than SHA-256 and sufficient for a cache key.
+        var maxLen = Encoding.UTF8.GetMaxByteCount(input?.Length ?? 0);
+        if (maxLen <= 512)
+        {
+            Span<byte> buf = stackalloc byte[maxLen];
+            int len = Encoding.UTF8.GetBytes(input ?? string.Empty, buf);
+            return XxHash64.HashToUInt64(buf[..len]).ToString("x16");
+        }
+        var heapBuf = Encoding.UTF8.GetBytes(input ?? string.Empty);
+        return XxHash64.HashToUInt64(heapBuf).ToString("x16");
     }
 }

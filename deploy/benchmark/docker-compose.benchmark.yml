@@ -1,0 +1,54 @@
+# BLite.Server.Benchmarks — Docker Compose
+#
+# IMPORTANT — build context requirement:
+#   The BLite.Server Dockerfile needs a build context that contains BOTH
+#   sibling repositories side-by-side:
+#
+#     <parent>/
+#       BLite/          ← engine repo (github.com/EntglDb/BLite)
+#       BLite.Server/   ← this repo
+#
+#   Run via the provided helper scripts (run-benchmarks.ps1 / run-benchmarks.sh)
+#   which set the correct context automatically, or build manually:
+#
+#     cd <parent>
+#     docker build -f BLite.Server/Dockerfile -t blite-server-bench .
+#
+#   Then:
+#     docker compose -f BLite.Server/deploy/benchmark/docker-compose.benchmark.yml up -d
+
+services:
+
+  blite:
+    # Context is ../../.. = the parent directory containing both sibling repos.
+    # The run scripts change to that directory before calling docker compose.
+    image: blite-server-bench:latest
+    ports:
+      - "2626:2626"
+      - "2627:2627"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      # HTTP cleartext inside Docker — TLS terminated at ingress or not needed for benchmarks.
+      KESTREL__ENDPOINTS__GRPC__URL:        http://*:2626
+      KESTREL__ENDPOINTS__GRPC__PROTOCOLS:  Http2
+      KESTREL__ENDPOINTS__REST__URL:        http://*:2627
+      KESTREL__ENDPOINTS__REST__PROTOCOLS:  Http1AndHttp2
+      # Provision the root user with this key on first boot so it matches the benchmark client.
+      AUTH__ROOTKEY:      bench-key
+      STUDIO__ENABLED:    "false"
+      TELEMETRY__ENABLED: "false"
+    # Intentionally ephemeral — no volume — each benchmark run starts from a clean state.
+    # No healthcheck: the runtime image does not ship curl or wget.
+    # The run scripts poll TCP port 2626 directly.
+
+  mongo:
+    image: mongo:8
+    ports:
+      - "27017:27017"
+    # Intentionally ephemeral — no volume — clean state every run.
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
