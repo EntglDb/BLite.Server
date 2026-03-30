@@ -2,14 +2,19 @@
 // Copyright (C) 2026 Luca Fabbri — AGPL-3.0
 //
 // Compares BLite.Server (gRPC / h2c) vs MongoDB (TCP) for common CRUD patterns.
-// Both servers must be running before this process starts — see:
-//   deploy/benchmark/docker-compose.benchmark.yml
+//
+// Run modes:
+//   1. Via run script (Docker, recommended for CI):  .\deploy\benchmark\run-benchmarks.ps1
+//   2. Self-hosted (no Docker needed): dotnet run -c Release --project tests/BLite.Server.Benchmarks
+//      → BLite starts in-process automatically when localhost:2626 is not reachable.
+//      → MongoDB benchmarks are skipped when localhost:27017 is not reachable.
 //
 // Connection URLs are read from environment variables:
 //   BLITE_URL      (default: http://localhost:2626)
 //   BLITE_API_KEY  (default: bench-key)
 //   MONGO_URL      (default: mongodb://localhost:27017)
 
+using System.Net.Sockets;
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Columns;
 using BenchmarkDotNet.Configs;
@@ -17,6 +22,8 @@ using BenchmarkDotNet.Order;
 using BLite.Client;
 using BLite.Client.Collections;
 using BLite.Proto;
+using Grpc.Net.Client;
+using Microsoft.AspNetCore.Mvc.Testing;
 using MongoDB.Driver;
 
 // Disambiguate the two BsonDocument types that would otherwise clash.
@@ -54,15 +61,25 @@ public class CrudBenchmarks
 
     // ── State ─────────────────────────────────────────────────────────────────
 
+    // Non-null after GlobalSetup; may use in-process channel when self-hosted.
     private BLiteClient             _bliteClient  = null!;
     private RemoteDynamicCollection _bliteCol     = null!;
     private BLiteBsonId             _bliteSeedId;   // stable ID for FindById benchmark
     private BLiteBsonId             _bliteWriteId;  // refreshed per Update/Delete iteration
 
-    private MongoClient                    _mongoClient = null!;
-    private IMongoCollection<MongoBsonDoc> _mongoCol    = null!;
-    private MongoDB.Bson.ObjectId          _mongoSeedId;
-    private MongoDB.Bson.ObjectId          _mongoWriteId;
+    // Non-null when an external BLite server was not detected at startup.
+    // EngineRegistry is used as the type parameter to identify the BLite.Server
+    // assembly without conflicting with this project's own implicit Program class.
+    private WebApplicationFactory<EngineRegistry>? _hostedServer;
+
+    // Null when MongoDB is not reachable — Mongo benchmarks report errors instead of crashing.
+    private MongoClient?                    _mongoClient;
+    private IMongoCollection<MongoBsonDoc>? _mongoCol;   // default write concern (w:1, j:false)
+    private IMongoCollection<MongoBsonDoc>? _mongoColJ;  // journaled write concern (w:1, j:true)
+    private MongoDB.Bson.ObjectId           _mongoSeedId;
+    private MongoDB.Bson.ObjectId           _mongoWriteId;
+    private MongoDB.Bson.ObjectId           _mongoWriteIdJ;
+    private bool                            _mongoAvailable;
 
     // ── Global setup / teardown ───────────────────────────────────────────────
 
@@ -72,20 +89,66 @@ public class CrudBenchmarks
         // Allow HTTP/2 cleartext (h2c) — required when UseTls = false.
         AppContext.SetSwitch("System.Net.Http.SocketsHttpHandler.Http2UnencryptedSupport", true);
 
-        // ── BLite ──────────────────────────────────────────────────────────────
-        _bliteClient = new BLiteClient(new BLiteClientOptions
+        // ── BLite: external server or in-process fallback ──────────────────────
+        if (await IsTcpReachableAsync(BLiteUrl))
         {
-            Address = BLiteUrl,
-            ApiKey  = BLiteApiKey,
-            UseTls  = false
-        });
+            // External server is running (Docker / manual start).
+            _bliteClient = new BLiteClient(new BLiteClientOptions
+            {
+                Address = BLiteUrl,
+                ApiKey  = BLiteApiKey,
+                UseTls  = false
+            });
+        }
+        else
+        {
+            // No external server detected — start BLite in-process.
+            Console.WriteLine("[Benchmarks] BLite server not reachable; starting in-process.");
 
-        // ── MongoDB ────────────────────────────────────────────────────────────
-        _mongoClient = new MongoClient(MongoUrl);
+            var dbPath = Path.Combine(Path.GetTempPath(), $"blite_bench_{Guid.NewGuid():N}.db");
+            var tenantsDir = Path.Combine(Path.GetTempPath(), $"blite_bench_tenants_{Guid.NewGuid():N}");
+
+            _hostedServer = new WebApplicationFactory<EngineRegistry>()
+                .WithWebHostBuilder(b =>
+                {
+                    b.UseSetting("Auth:RootKey",                  BLiteApiKey);
+                    b.UseSetting("BLiteServer:DatabasePath",      dbPath);
+                    b.UseSetting("BLiteServer:DatabasesDirectory", tenantsDir);
+                    b.UseSetting("Telemetry:Enabled",             "false");
+                    b.UseSetting("Studio:Enabled",                "false");
+                    // Disable the separate REST/Studio port config so TestServer
+                    // does not apply RequireHost() constraints to routes.
+                    b.UseSetting("Kestrel:Endpoints:Rest:Url",   "");
+                    b.UseSetting("Kestrel:Endpoints:Studio:Url", "");
+                });
+
+            // Trigger server startup.
+            _ = _hostedServer.CreateClient();
+
+            // Route gRPC through the in-process handler — no TCP overhead.
+            var handler = _hostedServer.Server.CreateHandler();
+            var channel = GrpcChannel.ForAddress("http://localhost", new GrpcChannelOptions
+            {
+                HttpHandler = handler
+            });
+            _bliteClient = new BLiteClient(channel, BLiteApiKey);
+        }
+
+        // ── MongoDB: optional ──────────────────────────────────────────────────
+        _mongoAvailable = await IsTcpReachableAsync(MongoUrl);
+        if (_mongoAvailable)
+        {
+            _mongoClient = new MongoClient(MongoUrl);
+        }
+        else
+        {
+            Console.WriteLine("[Benchmarks] MongoDB not reachable; Mongo benchmarks will be reported as errors.");
+        }
 
         // Drop any leftover data so re-runs always start from a known baseline.
         await _bliteClient.DropCollectionAsync(CollectionName);
-        await _mongoClient.GetDatabase(MongoDbName).DropCollectionAsync(CollectionName);
+        if (_mongoAvailable)
+            await _mongoClient!.GetDatabase(MongoDbName).DropCollectionAsync(CollectionName);
 
         // ── Create collection handles ──────────────────────────────────────────
         _bliteCol = _bliteClient.GetDynamicCollection(CollectionName);
@@ -96,13 +159,22 @@ public class CrudBenchmarks
             ["name", "category", "price", "stock", "active"],
             _ => { });
 
-        _mongoCol = _mongoClient.GetDatabase(MongoDbName)
-                                .GetCollection<MongoBsonDoc>(CollectionName);
+        if (_mongoAvailable)
+        {
+            var db = _mongoClient!.GetDatabase(MongoDbName);
+            _mongoCol  = db.GetCollection<MongoBsonDoc>(CollectionName);
+            _mongoColJ = db.GetCollection<MongoBsonDoc>(CollectionName,
+                new MongoCollectionSettings
+                {
+                    // Equivalent durability to BLite WAL: every write is fsynced before ack.
+                    WriteConcern = WriteConcern.Acknowledged.With(journal: true)
+                });
 
-        // Index on "category" mirrors what a DBA would add for the query benchmark.
-        await _mongoCol.Indexes.CreateOneAsync(
-            new CreateIndexModel<MongoBsonDoc>(
-                Builders<MongoBsonDoc>.IndexKeys.Ascending("category")));
+            // Index on "category" mirrors what a DBA would add for the query benchmark.
+            await _mongoCol.Indexes.CreateOneAsync(
+                new CreateIndexModel<MongoBsonDoc>(
+                    Builders<MongoBsonDoc>.IndexKeys.Ascending("category")));
+        }
 
         // Matching BTree index on BLite so the query benchmark is apples-to-apples.
         await _bliteCol.CreateIndexAsync("category");
@@ -113,16 +185,22 @@ public class CrudBenchmarks
 
         // One stable document per engine for the FindById benchmark.
         _bliteSeedId = await InsertOneBLiteAsync("seed-read-doc", "electronics", 99.99, 50);
-        _mongoSeedId = await InsertOneMongoAsync("seed-read-doc", "electronics", 99.99, 50);
+        if (_mongoAvailable)
+            _mongoSeedId = await InsertOneMongoAsync("seed-read-doc", "electronics", 99.99, 50);
     }
 
     [GlobalCleanup]
     public async Task GlobalCleanupAsync()
     {
         await _bliteClient.DropCollectionAsync(CollectionName);
-        await _mongoClient.GetDatabase(MongoDbName).DropCollectionAsync(CollectionName);
+        if (_mongoAvailable)
+            await _mongoClient!.GetDatabase(MongoDbName).DropCollectionAsync(CollectionName);
+
         await _bliteClient.DisposeAsync();
-        _mongoClient.Dispose();
+        _mongoClient?.Dispose();
+
+        if (_hostedServer is not null)
+            await _hostedServer.DisposeAsync();
     }
 
     // IterationSetup inserts a fresh document before each Update/Delete iteration
@@ -137,8 +215,19 @@ public class CrudBenchmarks
 
     [IterationSetup(Targets = [nameof(UpdateOne_Mongo), nameof(DeleteOne_Mongo)])]
     public void IterationSetup_Mongo()
-        => _mongoWriteId = InsertOneMongoAsync($"write-{Guid.NewGuid():N}", "books", 1.0, 1)
-                               .GetAwaiter().GetResult();
+    {
+        if (!_mongoAvailable) return;
+        _mongoWriteId = InsertOneMongoAsync($"write-{Guid.NewGuid():N}", "books", 1.0, 1)
+                            .GetAwaiter().GetResult();
+    }
+
+    [IterationSetup(Targets = [nameof(UpdateOne_MongoJ), nameof(DeleteOne_MongoJ)])]
+    public void IterationSetup_MongoJ()
+    {
+        if (!_mongoAvailable) return;
+        _mongoWriteIdJ = InsertOneMongoJAsync($"write-{Guid.NewGuid():N}", "books", 1.0, 1)
+                             .GetAwaiter().GetResult();
+    }
 
     // ── Insert (single) ───────────────────────────────────────────────────────
 
@@ -153,7 +242,17 @@ public class CrudBenchmarks
 
     [BenchmarkCategory("Insert-1"), Benchmark(Description = "MongoDB"), InvocationCount(1)]
     public Task InsertOne_Mongo()
-        => _mongoCol.InsertOneAsync(MakeMongoDoc("bench-insert", "electronics", 9.99, 100));
+    {
+        ThrowIfMongoUnavailable();
+        return _mongoCol!.InsertOneAsync(MakeMongoDoc("bench-insert", "electronics", 9.99, 100));
+    }
+
+    [BenchmarkCategory("Insert-1"), Benchmark(Description = "MongoDB j:true"), InvocationCount(1)]
+    public Task InsertOne_MongoJ()
+    {
+        ThrowIfMongoUnavailable();
+        return _mongoColJ!.InsertOneAsync(MakeMongoDoc("bench-insert", "electronics", 9.99, 100));
+    }
 
     // ── Insert (bulk) ─────────────────────────────────────────────────────────
 
@@ -172,10 +271,21 @@ public class CrudBenchmarks
     [BenchmarkCategory("InsertBulk"), Benchmark(Description = "MongoDB"), InvocationCount(1)]
     public async Task InsertBulk_Mongo()
     {
+        ThrowIfMongoUnavailable();
         var docs = new List<MongoBsonDoc>(BulkSize);
         for (int i = 0; i < BulkSize; i++)
             docs.Add(MakeMongoDoc($"bulk-{i}", Categories[i % 5], i * 0.99, i));
-        await _mongoCol.InsertManyAsync(docs);
+        await _mongoCol!.InsertManyAsync(docs);
+    }
+
+    [BenchmarkCategory("InsertBulk"), Benchmark(Description = "MongoDB j:true"), InvocationCount(1)]
+    public async Task InsertBulk_MongoJ()
+    {
+        ThrowIfMongoUnavailable();
+        var docs = new List<MongoBsonDoc>(BulkSize);
+        for (int i = 0; i < BulkSize; i++)
+            docs.Add(MakeMongoDoc($"bulk-{i}", Categories[i % 5], i * 0.99, i));
+        await _mongoColJ!.InsertManyAsync(docs);
     }
 
     // ── FindById ──────────────────────────────────────────────────────────────
@@ -187,8 +297,9 @@ public class CrudBenchmarks
     [BenchmarkCategory("FindById"), Benchmark(Description = "MongoDB")]
     public async Task FindById_Mongo()
     {
+        ThrowIfMongoUnavailable();
         var filter = Builders<MongoBsonDoc>.Filter.Eq("_id", _mongoSeedId);
-        _ = await _mongoCol.Find(filter).FirstOrDefaultAsync();
+        _ = await _mongoCol!.Find(filter).FirstOrDefaultAsync();
     }
 
     // ── Query (server-side category filter, top 100) ──────────────────────────
@@ -216,8 +327,9 @@ public class CrudBenchmarks
     [BenchmarkCategory("Query"), Benchmark(Description = "MongoDB")]
     public async Task<int> QueryByCategory_Mongo()
     {
+        ThrowIfMongoUnavailable();
         var filter = Builders<MongoBsonDoc>.Filter.Eq("category", "electronics");
-        var docs   = await _mongoCol.Find(filter).Limit(100).ToListAsync();
+        var docs   = await _mongoCol!.Find(filter).Limit(100).ToListAsync();
         return docs.Count;
     }
 
@@ -233,12 +345,25 @@ public class CrudBenchmarks
     [BenchmarkCategory("Update-1"), Benchmark(Description = "MongoDB")]
     public Task UpdateOne_Mongo()
     {
+        ThrowIfMongoUnavailable();
         var filter = Builders<MongoBsonDoc>.Filter.Eq("_id", _mongoWriteId);
         var update = Builders<MongoBsonDoc>.Update
             .Set("name",  "updated-name")
             .Set("price", 1.99)
             .Set("stock", 0);
-        return _mongoCol.UpdateOneAsync(filter, update);
+        return _mongoCol!.UpdateOneAsync(filter, update);
+    }
+
+    [BenchmarkCategory("Update-1"), Benchmark(Description = "MongoDB j:true")]
+    public Task UpdateOne_MongoJ()
+    {
+        ThrowIfMongoUnavailable();
+        var filter = Builders<MongoBsonDoc>.Filter.Eq("_id", _mongoWriteIdJ);
+        var update = Builders<MongoBsonDoc>.Update
+            .Set("name",  "updated-name")
+            .Set("price", 1.99)
+            .Set("stock", 0);
+        return _mongoColJ!.UpdateOneAsync(filter, update);
     }
 
     // ── Delete (single) ───────────────────────────────────────────────────────
@@ -250,8 +375,17 @@ public class CrudBenchmarks
     [BenchmarkCategory("Delete-1"), Benchmark(Description = "MongoDB")]
     public Task DeleteOne_Mongo()
     {
+        ThrowIfMongoUnavailable();
         var filter = Builders<MongoBsonDoc>.Filter.Eq("_id", _mongoWriteId);
-        return _mongoCol.DeleteOneAsync(filter);
+        return _mongoCol!.DeleteOneAsync(filter);
+    }
+
+    [BenchmarkCategory("Delete-1"), Benchmark(Description = "MongoDB j:true")]
+    public Task DeleteOne_MongoJ()
+    {
+        ThrowIfMongoUnavailable();
+        var filter = Builders<MongoBsonDoc>.Filter.Eq("_id", _mongoWriteIdJ);
+        return _mongoColJ!.DeleteOneAsync(filter);
     }
 
     // ── Private helpers ───────────────────────────────────────────────────────
@@ -288,7 +422,15 @@ public class CrudBenchmarks
         string name, string category, double price, int stock)
     {
         var doc = MakeMongoDoc(name, category, price, stock);
-        await _mongoCol.InsertOneAsync(doc);
+        await _mongoCol!.InsertOneAsync(doc);
+        return doc["_id"].AsObjectId;
+    }
+
+    private async Task<MongoDB.Bson.ObjectId> InsertOneMongoJAsync(
+        string name, string category, double price, int stock)
+    {
+        var doc = MakeMongoDoc(name, category, price, stock);
+        await _mongoColJ!.InsertOneAsync(doc);
         return doc["_id"].AsObjectId;
     }
 
@@ -300,9 +442,52 @@ public class CrudBenchmarks
                 $"seed-{i}", Categories[i % 5], i * 1.5, i % 500);
         await _bliteCol.InsertBulkAsync(bliteDocs);
 
-        var mongoDocs = new List<MongoBsonDoc>(count);
-        for (int i = 0; i < count; i++)
-            mongoDocs.Add(MakeMongoDoc($"seed-{i}", Categories[i % 5], i * 1.5, i % 500));
-        await _mongoCol.InsertManyAsync(mongoDocs);
+        if (_mongoAvailable)
+        {
+            var mongoDocs = new List<MongoBsonDoc>(count);
+            for (int i = 0; i < count; i++)
+                mongoDocs.Add(MakeMongoDoc($"seed-{i}", Categories[i % 5], i * 1.5, i % 500));
+            await _mongoCol!.InsertManyAsync(mongoDocs);
+        }
+    }
+
+    // ── Connectivity helpers ──────────────────────────────────────────────────
+
+    // Tries a TCP connect to the host:port encoded in a URL or a mongodb:// URI.
+    private static async Task<bool> IsTcpReachableAsync(string url, int timeoutMs = 1000)
+    {
+        try
+        {
+            string host;
+            int port;
+            if (url.StartsWith("mongodb://", StringComparison.OrdinalIgnoreCase))
+            {
+                var uri = new Uri(url);
+                host = uri.Host;
+                port = uri.Port > 0 ? uri.Port : 27017;
+            }
+            else
+            {
+                var uri = new Uri(url);
+                host = uri.Host;
+                port = uri.Port > 0 ? uri.Port : 2626;
+            }
+
+            using var client = new TcpClient();
+            using var cts    = new CancellationTokenSource(timeoutMs);
+            await client.ConnectAsync(host, port, cts.Token);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private void ThrowIfMongoUnavailable()
+    {
+        if (!_mongoAvailable)
+            throw new InvalidOperationException(
+                "MongoDB is not reachable. Start MongoDB (or use run-benchmarks.ps1) to include Mongo benchmarks.");
     }
 }

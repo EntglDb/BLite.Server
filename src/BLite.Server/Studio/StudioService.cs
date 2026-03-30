@@ -25,12 +25,12 @@ namespace BLite.Server.Studio;
 /// </summary>
 public sealed class StudioService
 {
-    private readonly EngineRegistry      _registry;
-    private readonly UserRepository      _users;
-    private readonly SetupService        _setup;
-    private readonly ApiKeyValidator     _validator;
+    private readonly EngineRegistry _registry;
+    private readonly UserRepository _users;
+    private readonly SetupService _setup;
+    private readonly ApiKeyValidator _validator;
     private readonly AuthorizationService _authz;
-    private readonly EmbeddingService    _embedding;
+    private readonly EmbeddingService _embedding;
     private readonly EmbeddingQueuePopulator _populator;
     private readonly ServerMetricsCollector _metrics;
     private readonly string _sourceUrl;
@@ -41,14 +41,14 @@ public sealed class StudioService
         EmbeddingQueuePopulator populator, ServerMetricsCollector metrics,
         IConfiguration config)
     {
-        _registry  = registry;
-        _users     = users;
-        _setup     = setup;
+        _registry = registry;
+        _users = users;
+        _setup = setup;
         _validator = validator;
-        _authz     = authz;
+        _authz = authz;
         _embedding = embedding;
         _populator = populator;
-        _metrics   = metrics;
+        _metrics = metrics;
         _sourceUrl = config.GetValue<string>("License:SourceUrl")
                      ?? "https://github.com/blitedb/BLite.Server";
     }
@@ -77,12 +77,12 @@ public sealed class StudioService
     // ── Server info ───────────────────────────────────────────────────────────
 
     public ServerInfo GetServerInfo() => new(
-        Version:       typeof(BLiteEngine).Assembly.GetName().Version?.ToString() ?? "0.0.0",
-        Uptime:        DateTime.UtcNow - Process.GetCurrentProcess().StartTime.ToUniversalTime(),
-        TenantCount:   _registry.ListTenants().Count,
-        UserCount:     _users.ListAll().Count,
-        DatabasesDir:  _registry.DatabasesDirectory,
-        SourceUrl:     _sourceUrl);
+        Version: typeof(BLiteEngine).Assembly.GetName().Version?.ToString() ?? "0.0.0",
+        Uptime: DateTime.UtcNow - Process.GetCurrentProcess().StartTime.ToUniversalTime(),
+        TenantCount: _registry.ListTenants().Count,
+        UserCount: _users.ListAll().Count,
+        DatabasesDir: _registry.DatabasesDirectory,
+        SourceUrl: _sourceUrl);
     // ── Metrics ──────────────────────────────────────────────────
 
     /// <summary>Returns the most recent metrics snapshot, or <c>null</c> if not yet collected.</summary>
@@ -109,8 +109,8 @@ public sealed class StudioService
     public async Task<(byte[] Data, string FileName)> GetBackupAsync(
         string? databaseId, CancellationToken ct = default)
     {
-        var label   = (databaseId ?? "system").Trim().ToLowerInvariant();
-        var stamp   = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
+        var label = (databaseId ?? "system").Trim().ToLowerInvariant();
+        var stamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
         var zipName = $"blite-backup-{label}-{stamp}.zip";
         var tempZip = Path.Combine(Path.GetTempPath(), $"blite-bkp-{Guid.NewGuid():N}.zip");
         try
@@ -144,7 +144,7 @@ public sealed class StudioService
         return plainKey;
     }
 
-    public Task RevokeUserAsync(string username)   => _users.RevokeAsync(username);
+    public Task RevokeUserAsync(string username) => _users.RevokeAsync(username);
     public Task<bool> DeleteUserAsync(string username) => _users.DeleteUserAsync(username);
 
     /// <summary>Returns the user record by username, or null if not found.</summary>
@@ -204,9 +204,9 @@ public sealed class StudioService
         // to be in the engine's persisted dictionary before serialization.
         engine.RegisterKeys(CollectJsonKeys(json));
 
-        var keyMap     = (ConcurrentDictionary<string, ushort>)engine.GetKeyMap();
+        var keyMap = (ConcurrentDictionary<string, ushort>)engine.GetKeyMap();
         var reverseMap = (ConcurrentDictionary<ushort, string>)engine.GetKeyReverseMap();
-        var doc        = BsonJsonConverter.FromJson(json, keyMap, reverseMap);
+        var doc = BsonJsonConverter.FromJson(json, keyMap, reverseMap);
         return await engine.InsertAsync(collection, doc, ct);
     }
 
@@ -247,11 +247,11 @@ public sealed class StudioService
         CancellationToken ct = default)
     {
         var engine = _registry.GetEngine(databaseId);
-        var col    = engine.GetOrCreateCollection(collectionName);
+        var col = engine.GetOrCreateCollection(collectionName);
         // A bare GetOrCreateCollection won't persist; insert + delete is the canonical way
         // to materialise an empty-looking collection.
         var doc = col.CreateDocument(["__studio_init"], b => b.AddBoolean("__studio_init", true));
-        var id  = await col.InsertAsync(doc, ct);
+        var id = await col.InsertAsync(doc, ct);
         await col.DeleteAsync(id, ct);
         await engine.CommitAsync(ct);
     }
@@ -262,17 +262,17 @@ public sealed class StudioService
         {
             case JsonValueKind.String:
                 // Try parse as DateTime
-                if (el.TryGetDateTime(out var dt))  { b.AddDateTime(name, dt);          break; }
-                if (Guid.TryParse(el.GetString(), out var g)) { b.AddGuid(name, g);     break; }
+                if (el.TryGetDateTime(out var dt)) { b.AddDateTime(name, dt); break; }
+                if (Guid.TryParse(el.GetString(), out var g)) { b.AddGuid(name, g); break; }
                 b.AddString(name, el.GetString()!);
                 break;
             case JsonValueKind.Number:
-                if (el.TryGetInt64(out var l))        { b.AddInt64(name, l);             break; }
+                if (el.TryGetInt64(out var l)) { b.AddInt64(name, l); break; }
                 b.AddDouble(name, el.GetDouble());
                 break;
-            case JsonValueKind.True:  b.AddBoolean(name, true);  break;
+            case JsonValueKind.True: b.AddBoolean(name, true); break;
             case JsonValueKind.False: b.AddBoolean(name, false); break;
-            case JsonValueKind.Null:  b.AddNull(name);            break;
+            case JsonValueKind.Null: b.AddNull(name); break;
             default: // Object or Array → store as JSON string for now
                 b.AddString(name, el.GetRawText());
                 break;
@@ -282,11 +282,11 @@ public sealed class StudioService
     // ── Collection metadata ───────────────────────────────────────────────────
 
     /// <summary>Returns document count and ID type for a single collection.</summary>
-    public (int Count, string IdType) GetCollectionMeta(string? databaseId, string collection)
+    public async Task<(int Count, string IdType)> GetCollectionMeta(string? databaseId, string collection)
     {
         var engine = _registry.GetEngine(databaseId);
-        var col    = engine.GetOrCreateCollection(collection);
-        return (col.Count(), col.IdType.ToString());
+        var col = engine.GetOrCreateCollection(collection);
+        return (await col.CountAsync(), col.IdType.ToString());
     }
 
     // ── Index management ──────────────────────────────────────────────────────
@@ -312,7 +312,7 @@ public sealed class StudioService
     public IReadOnlyList<string> ListIndexes(string? databaseId, string collection)
     {
         var engine = _registry.GetEngine(databaseId);
-        var col    = engine.GetOrCreateCollection(collection);
+        var col = engine.GetOrCreateCollection(collection);
         return col.ListIndexes();
     }
 
@@ -327,13 +327,13 @@ public sealed class StudioService
     /// Samples up to <paramref name="sampleSize"/> documents to discover field names and types.
     /// One entry per unique field name; first type seen wins.
     /// </summary>
-    public IReadOnlyList<FieldSample> SampleFields(string? databaseId, string collection, int sampleSize = 20)
+    public async Task<IReadOnlyList<FieldSample>> SampleFields(string? databaseId, string collection, int sampleSize = 20)
     {
-        var engine     = _registry.GetEngine(databaseId);
-        var col        = engine.GetOrCreateCollection(collection);
+        var engine = _registry.GetEngine(databaseId);
+        var col = engine.GetOrCreateCollection(collection);
         var discovered = new Dictionary<string, (BsonType Type, BsonType? ArrayItemType)>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var doc in col.FindAll().Take(sampleSize))
+        await foreach (var doc in col.FindAllAsync().Take(sampleSize))
         {
             foreach (var (name, value) in doc.EnumerateFields())
             {
@@ -363,8 +363,8 @@ public sealed class StudioService
         CancellationToken ct = default)
     {
         var engine = _registry.GetEngine(databaseId);
-        var col    = engine.GetOrCreateCollection(collection);
-        col.CreateIndex(field, string.IsNullOrWhiteSpace(name) ? null : name.Trim(), unique);
+        var col = engine.GetOrCreateCollection(collection);
+        await col.CreateIndexAsync(field, string.IsNullOrWhiteSpace(name) ? null : name.Trim(), unique);
         await engine.CommitAsync(ct);
     }
 
@@ -375,8 +375,8 @@ public sealed class StudioService
         CancellationToken ct = default)
     {
         var engine = _registry.GetEngine(databaseId);
-        var col    = engine.GetOrCreateCollection(collection);
-        col.CreateVectorIndex(field, dimensions, metric, string.IsNullOrWhiteSpace(name) ? null : name.Trim());
+        var col = engine.GetOrCreateCollection(collection);
+        await col.CreateVectorIndexAsync(field, dimensions, metric, string.IsNullOrWhiteSpace(name) ? null : name.Trim());
         await engine.CommitAsync(ct);
         await _populator.RefreshSubscriptionAsync(databaseId, collection, ct);
     }
@@ -388,8 +388,8 @@ public sealed class StudioService
         CancellationToken ct = default)
     {
         var engine = _registry.GetEngine(databaseId);
-        var col    = engine.GetOrCreateCollection(collection);
-        col.CreateSpatialIndex(field, string.IsNullOrWhiteSpace(name) ? null : name.Trim());
+        var col = engine.GetOrCreateCollection(collection);
+        await col.CreateSpatialIndexAsync(field, string.IsNullOrWhiteSpace(name) ? null : name.Trim());
         await engine.CommitAsync(ct);
     }
 
@@ -399,8 +399,8 @@ public sealed class StudioService
         CancellationToken ct = default)
     {
         var engine = _registry.GetEngine(databaseId);
-        var col    = engine.GetOrCreateCollection(collection);
-        var ok     = col.DropIndex(indexName);
+        var col = engine.GetOrCreateCollection(collection);
+        var ok = col.DropIndex(indexName);
         if (ok)
         {
             await engine.CommitAsync(ct);
@@ -422,7 +422,7 @@ public sealed class StudioService
         CancellationToken ct = default)
     {
         var engine = _registry.GetEngine(databaseId);
-        var col    = engine.GetOrCreateCollection(collection);
+        var col = engine.GetOrCreateCollection(collection);
 
         var query = col.Query();
 
@@ -447,9 +447,9 @@ public sealed class StudioService
         CancellationToken ct = default)
     {
         var engine = _registry.GetEngine(databaseId);
-        var col    = engine.GetOrCreateCollection(collection);
-        var rows   = new List<DocumentRow>();
-        int index  = 0;
+        var col = engine.GetOrCreateCollection(collection);
+        var rows = new List<DocumentRow>();
+        int index = 0;
 
         await foreach (var doc in col.FindAllAsync(ct))
         {
@@ -466,8 +466,8 @@ public sealed class StudioService
         string? databaseId, string collection, CancellationToken ct = default)
     {
         var engine = _registry.GetEngine(databaseId);
-        var col    = engine.GetOrCreateCollection(collection);
-        int count  = 0;
+        var col = engine.GetOrCreateCollection(collection);
+        int count = 0;
         await foreach (var _ in col.FindAllAsync(ct))
             count++;
         return count;
@@ -489,7 +489,7 @@ public sealed class StudioService
         CancellationToken ct = default)
     {
         var engine = _registry.GetEngine(databaseId);
-        var doc    = await engine.FindByIdAsync(collection, id, ct);
+        var doc = await engine.FindByIdAsync(collection, id, ct);
         return doc is null ? null : BsonJsonConverter.ToJson(doc, indented: true);
     }
 
@@ -575,10 +575,10 @@ public sealed class StudioService
     /// using the collection's VectorSource configuration.
     /// Returns <see cref="string.Empty"/> if the document is not found or no VectorSource is configured.
     /// </summary>
-    public string BuildEmbeddingTextById(string? databaseId, string collection, BsonId id)
+    public async Task<string> BuildEmbeddingTextById(string? databaseId, string collection, BsonId id)
     {
         var engine = _registry.GetEngine(databaseId);
-        var doc    = engine.FindById(collection, id);
+        var doc = await engine.FindByIdAsync(collection, id);
         if (doc == null) return string.Empty;
         var config = engine.GetVectorSource(collection);
         return config == null ? string.Empty : TextNormalizer.BuildEmbeddingText(doc, config);
@@ -645,9 +645,9 @@ public sealed class StudioService
     {
         var engine = _registry.GetEngine(databaseId);
         engine.RegisterKeys(CollectJsonKeys(json));
-        var keyMap     = (ConcurrentDictionary<string, ushort>)engine.GetKeyMap();
+        var keyMap = (ConcurrentDictionary<string, ushort>)engine.GetKeyMap();
         var reverseMap = (ConcurrentDictionary<ushort, string>)engine.GetKeyReverseMap();
-        var doc        = BsonJsonConverter.FromJson(json, keyMap, reverseMap);
+        var doc = BsonJsonConverter.FromJson(json, keyMap, reverseMap);
         return await engine.UpdateAsync(collection, id, doc, ct);
     }
 
@@ -713,21 +713,21 @@ public sealed class StudioService
 
     private static string FormatValue(BsonValue val)
     {
-        if (val.IsNull)     return "null";
-        if (val.IsString)   return val.AsString;
-        if (val.IsInt32)    return val.AsInt32.ToString();
-        if (val.IsInt64)    return val.AsInt64.ToString();
-        if (val.IsDouble)   return val.AsDouble.ToString("G");
-        if (val.IsBoolean)  return val.AsBoolean ? "true" : "false";
+        if (val.IsNull) return "null";
+        if (val.IsString) return val.AsString;
+        if (val.IsInt32) return val.AsInt32.ToString();
+        if (val.IsInt64) return val.AsInt64.ToString();
+        if (val.IsDouble) return val.AsDouble.ToString("G");
+        if (val.IsBoolean) return val.AsBoolean ? "true" : "false";
         if (val.IsDateTime) return val.AsDateTime.ToString("O");
         if (val.IsObjectId) return val.AsObjectId.ToString();
         if (val.IsCoordinates) return $"({val.AsCoordinates.Lat}, {val.AsCoordinates.Lon})";
-        if (val.IsArray)    return $"[{string.Join(", ", val.AsArray.Select(FormatValue))}]";
+        if (val.IsArray) return $"[{string.Join(", ", val.AsArray.Select(FormatValue))}]";
         if (val.IsDocument) return "{...}";
-        if (val.IsBinary)   return $"<binary {val.AsBinary.Length} bytes>";
-        if (val.IsDecimal)  return val.AsDecimal.ToString("G");
-        if (val.IsGuid)     return val.AsGuid.ToString();
-        if(val.IsTimestamp) return val.AsTimestamp.ToString("O");
+        if (val.IsBinary) return $"<binary {val.AsBinary.Length} bytes>";
+        if (val.IsDecimal) return val.AsDecimal.ToString("G");
+        if (val.IsGuid) return val.AsGuid.ToString();
+        if (val.IsTimestamp) return val.AsTimestamp.ToString("O");
         return val.ToString() ?? "???";
     }
 }

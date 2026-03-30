@@ -55,9 +55,19 @@ export function makeStubs(
 
   // For insecure transport grpc-js forbids combining InsecureChannelCredentials
   // with CallCredentials, so we inject the API key via a channel interceptor instead.
+  const baseOpts = {
+    // HTTP/2 keep-alive: prevents silent connection drops behind NAT/LB.
+    'grpc.keepalive_time_ms':              30_000,
+    'grpc.keepalive_timeout_ms':           10_000,
+    'grpc.keepalive_permit_without_calls': 1,
+    // Match server-side 16 MB limits to avoid spurious message-too-large errors.
+    'grpc.max_receive_message_length':     16 * 1024 * 1024,
+    'grpc.max_send_message_length':        16 * 1024 * 1024,
+    ...(opts ?? {}),
+  };
   const channelOpts: object = useTls
-    ? (opts ?? {})
-    : { ...(opts ?? {}), interceptors: [makeApiKeyInterceptor(apiKey)] };
+    ? baseOpts
+    : { ...baseOpts, interceptors: [makeApiKeyInterceptor(apiKey)] };
 
   const make = (Ctor: GrpcStubCtor) => new Ctor(address, creds, channelOpts);
 

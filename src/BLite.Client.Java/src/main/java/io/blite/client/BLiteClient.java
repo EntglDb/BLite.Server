@@ -98,16 +98,15 @@ public final class BLiteClient implements AutoCloseable {
     // ── Channel construction ──────────────────────────────────────────────────
 
     private static ManagedChannel buildChannel(BLiteClientOptions opts) {
-        var target = opts.getHost() + ":" + opts.getPort();
-        if (opts.isUseTls()) {
-            return ManagedChannelBuilder.forTarget(target)
-                    .useTransportSecurity()
-                    .build();
-        } else {
-            return ManagedChannelBuilder.forTarget(target)
-                    .usePlaintext()
-                    .build();
-        }
+        var target  = opts.getHost() + ":" + opts.getPort();
+        var builder = ManagedChannelBuilder.forTarget(target)
+                // HTTP/2 keep-alive: detect dead servers and prevent silent NAT drops.
+                .keepAliveTime(30, TimeUnit.SECONDS)
+                .keepAliveTimeout(10, TimeUnit.SECONDS)
+                .keepAliveWithoutCalls(true)
+                // Match server-side 16 MB cap.
+                .maxInboundMessageSize(16 * 1024 * 1024);
+        return (opts.isUseTls() ? builder.useTransportSecurity() : builder.usePlaintext()).build();
     }
 
     private static Metadata apiKeyHeaders(String apiKey) {

@@ -12,8 +12,8 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.*" />
-    <PackageReference Include="Scalar.AspNetCore" Version="2.13.13" />
-    <PackageReference Include="BLite.SourceGenerators" Version="3.8.1-preview.0">
+    <PackageReference Include="Scalar.AspNetCore" Version="2.13.15" />
+    <PackageReference Include="BLite.SourceGenerators" Version="3.8.1-preview.3">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>

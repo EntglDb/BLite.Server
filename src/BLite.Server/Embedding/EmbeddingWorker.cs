@@ -134,7 +134,7 @@ public sealed class EmbeddingWorker : BackgroundService
                 }
 
                 var col = engine.GetOrCreateCollection(task.Collection);
-                var doc = col.FindById(task.DocumentId);
+                var doc = await col.FindByIdAsync(task.DocumentId);
                 if (doc == null)
                 {
                     completedIds.Add(task.Id);
@@ -164,18 +164,18 @@ public sealed class EmbeddingWorker : BackgroundService
 
         // Phase 2: Persist (single transaction per database)
         var localCompleted = new List<BsonId>();
-        engine.BeginTransaction();
+        await engine.BeginTransactionAsync();
         try
         {
             foreach (var (task, docId, fieldPath, vector) in toUpdate)
             {
                 var col = engine.GetOrCreateCollection(task.Collection);
-                var doc = col.FindById(docId);
+                var doc = await col.FindByIdAsync(docId);
                 if (doc == null)
                     continue;
 
                 var updated = BuildDocumentWithVector(engine, doc, fieldPath, vector);
-                col.Update(docId, updated);
+                await col.UpdateAsync(docId, updated);
                 localCompleted.Add(task.Id);
             }
 

@@ -572,17 +572,17 @@
         _                 => "badge-btree"
     };
 
-    protected override void OnParametersSet() => Refresh();
+    protected override async Task OnParametersSetAsync() => await Refresh();
 
-    private void Refresh()
+    private async Task Refresh()
     {
         try
         {
-            var (count, idType) = Studio.GetCollectionMeta(DbId, DecodedCollection);
+            var (count, idType) = await Studio.GetCollectionMeta(DbId, DecodedCollection);
             _docCount         = count;
             _idType           = idType;
             _indexDescriptors = Studio.GetIndexDescriptors(DbId, DecodedCollection);
-            _fieldSamples     = Studio.SampleFields(DbId, DecodedCollection);
+            _fieldSamples     = await Studio.SampleFields(DbId, DecodedCollection);
             LoadVectorSource();
             LoadSchema();
             _timeSeriesInfo   = Studio.GetTimeSeriesInfo(DbId, DecodedCollection);

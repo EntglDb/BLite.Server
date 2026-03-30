@@ -361,7 +361,7 @@ public sealed class DynamicServiceImpl : DynamicService.DynamicServiceBase
             var efSearch = request.EfSearch > 0 ? request.EfSearch : 100;
             var queryVector = request.QueryVector.ToArray();
 
-            foreach (var doc in collection.VectorSearch(indexName, queryVector, k, efSearch))
+            await foreach (var doc in collection.VectorSearchAsync(indexName, queryVector, k, efSearch))
             {
                 context.CancellationToken.ThrowIfCancellationRequested();
                 var payload = BsonPayloadSerializer.Serialize(doc);
@@ -416,15 +416,15 @@ public sealed class DynamicServiceImpl : DynamicService.DynamicServiceBase
                     "dotproduct" => BLite.Core.Indexing.VectorMetric.DotProduct,
                     _            => BLite.Core.Indexing.VectorMetric.Cosine
                 };
-                collection.CreateVectorIndex(request.Field, request.Dimensions, metric, name);
+                await collection.CreateVectorIndexAsync(request.Field, request.Dimensions, metric, name);
             }
             else if (request.IsSpatial)
             {
-                collection.CreateSpatialIndex(request.Field, name);
+                await collection.CreateSpatialIndexAsync(request.Field, name);
             }
             else
             {
-                collection.CreateIndex(request.Field, name, request.Unique);
+                await collection.CreateIndexAsync(request.Field, name, request.Unique);
             }
 
             await engine.CommitAsync(context.CancellationToken);
@@ -502,7 +502,7 @@ public sealed class DynamicServiceImpl : DynamicService.DynamicServiceBase
             var skip   = request.Skip > 0 ? request.Skip : 0;
             var take   = request.Take > 0 ? request.Take : int.MaxValue;
 
-            IEnumerable<BsonDocument> source = collection.QueryIndex(request.IndexName, minKey, maxKey);
+            IEnumerable<BsonDocument> source = await collection.QueryIndexAsync(request.IndexName, minKey, maxKey).ToListAsync();
             if (!request.Ascending)
                 source = source.Reverse(); // buffers all in memory; ascending is preferred for large result sets
 
@@ -732,7 +732,7 @@ public sealed class DynamicServiceImpl : DynamicService.DynamicServiceBase
         }
     }
 
-    public override Task<MutationResponse> ForcePrune(
+    public override async Task<MutationResponse> ForcePrune(
         CollectionRequest request, ServerCallContext context)
     {
         var (col, user) = AuthorizeWithUser(context, request.Collection, BLiteOperation.Admin);
@@ -741,16 +741,16 @@ public sealed class DynamicServiceImpl : DynamicService.DynamicServiceBase
         {
             var collection = engine.GetOrCreateCollection(col);
             if (!collection.IsTimeSeries)
-                return Task.FromResult(new MutationResponse { Success = false, Error = "ForcePrune is only valid on TimeSeries collections." });
-            collection.ForcePrune();
-            engine.Commit();
-            return Task.FromResult(new MutationResponse { Success = true });
+                return new MutationResponse { Success = false, Error = "ForcePrune is only valid on TimeSeries collections." };
+            await collection.ForcePruneAsync();
+            await engine.CommitAsync(context.CancellationToken);
+            return new MutationResponse { Success = true };
         }
         catch (RpcException) { throw; }
         catch (Exception ex)
         {
             _logger.LogError(ex, "ForcePrune failed on collection {Col}", col);
-            return Task.FromResult(new MutationResponse { Success = false, Error = ex.Message });
+            return new MutationResponse { Success = false, Error = ex.Message };
         }
     }
 
@@ -837,7 +837,7 @@ public sealed class DynamicServiceImpl : DynamicService.DynamicServiceBase
                         IdType = (int)evt.IdType
                     },
                     BsonPayload = evt.Payload != null
-                        ? ByteString.CopyFrom(evt.Payload.RawData)
+                        ? ByteString.CopyFrom(evt.Payload.RawData.Span)
                         : ByteString.Empty
                 };
                 await responseStream.WriteAsync(response, ct).ConfigureAwait(false);

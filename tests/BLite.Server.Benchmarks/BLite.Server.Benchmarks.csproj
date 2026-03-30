@@ -11,13 +11,16 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="BenchmarkDotNet" Version="0.14.*" />
-    <PackageReference Include="MongoDB.Driver"  Version="3.*"    />
+    <PackageReference Include="BenchmarkDotNet" Version="0.15.8" />
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.*" />
+    <PackageReference Include="MongoDB.Driver" Version="3.*" />
   </ItemGroup>
 
   <ItemGroup>
     <!-- Client + transitive BLite.Proto (QueryDescriptor, BinaryFilter, ScalarValue…) -->
     <ProjectReference Include="..\..\src\BLite.Client\BLite.Client.csproj" />
+    <!-- Server — started in-process via WebApplicationFactory<Program> when no external server is detected -->
+    <ProjectReference Include="..\..\src\BLite.Server\BLite.Server.csproj" />
   </ItemGroup>
 
 </Project>

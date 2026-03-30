@@ -21,7 +21,7 @@ public sealed class InstanceIdProvider
 
     public InstanceIdProvider(EngineRegistry engineRegistry)
     {
-        _instanceId = Load(engineRegistry.SystemEngine);
+        _instanceId = Load(engineRegistry.SystemEngine).GetAwaiter().GetResult();
         if (_instanceId is null)
         {
             _instanceId = Guid.NewGuid().ToString("N");
@@ -33,10 +33,10 @@ public sealed class InstanceIdProvider
 
     // ── persistence ───────────────────────────────────────────────────────────
 
-    private static string? Load(BLiteEngine engine)
+    private static async Task<string?> Load(BLiteEngine engine)
     {
         var collection = engine.GetOrCreateCollection(CollectionName);
-        foreach (var doc in collection.FindAll())
+        await foreach (var doc in collection.FindAllAsync())
         {
             if (doc.TryGetString(KeyField, out var key) && key == InstanceIdKey
                 && doc.TryGetString(ValueField, out var value))

@@ -27,16 +27,23 @@ using Scalar.AspNetCore;
 var builder = WebApplication.CreateBuilder(args);
 
 // Pre-warm the thread pool to avoid the 2-threads/sec ramp-up after idle periods.
-// Without this, burst traffic can queue for hundreds of milliseconds while the pool grows.
-ThreadPool.SetMinThreads(50, 50);
+// Scale with CPU count so burst concurrency on high-core machines doesn't queue.
+var minThreads = Math.Max(50, Environment.ProcessorCount * 8);
+ThreadPool.SetMinThreads(minThreads, minThreads);
 
-// Tune HTTP/2 flow control windows: larger windows reduce round-trips in high-throughput
-// gRPC streaming and bulk-insert workloads.
+// Tune HTTP/2 flow control windows and frame sizes for gRPC throughput.
 builder.WebHost.ConfigureKestrel(k =>
 {
     k.Limits.Http2.MaxStreamsPerConnection     = 200;
     k.Limits.Http2.InitialConnectionWindowSize = 1 * 1024 * 1024;  // 1 MB
-    k.Limits.Http2.InitialStreamWindowSize    = 512 * 1024;         // 512 KB
+    k.Limits.Http2.InitialStreamWindowSize     = 512 * 1024;        // 512 KB
+    // Larger DATA frames → 4× fewer syscalls for bulk streaming payloads (InsertBulk, Query).
+    k.Limits.Http2.MaxFrameSize               = 65535;
+    // Server-side keep-alive pings prevent silent connection drops behind NAT/LB.
+    k.Limits.Http2.KeepAlivePingDelay         = TimeSpan.FromSeconds(30);
+    k.Limits.Http2.KeepAlivePingTimeout       = TimeSpan.FromSeconds(10);
+    // A DB server should never wait 30s for request headers; free stale connections quickly.
+    k.Limits.RequestHeadersTimeout            = TimeSpan.FromSeconds(10);
 });
 
 // Support running as a Windows Service or a Linux systemd daemon.
@@ -187,14 +194,27 @@ if (telemetryOn)
         });
 }
 
+// REST response compression (Brotli preferred, Gzip fallback).
+// Must be registered before AddGrpc so the middleware chain is ordered correctly.
+builder.Services.AddResponseCompression(opts =>
+{
+    opts.EnableForHttps = true;  // safe for APIs (no BREACH risk without secret HTML forms)
+    opts.Providers.Add<Microsoft.AspNetCore.ResponseCompression.BrotliCompressionProvider>();
+    opts.Providers.Add<Microsoft.AspNetCore.ResponseCompression.GzipCompressionProvider>();
+});
+
 // gRPC
 builder.Services.AddGrpc(options =>
 {
     options.Interceptors.Add<RestrictionInterceptor>();  // must run first — applies delay
     options.Interceptors.Add<TelemetryInterceptor>();
     options.EnableDetailedErrors = builder.Environment.IsDevelopment();
-    options.MaxReceiveMessageSize = 16 * 1024 * 1024; // 16 MB
-    options.MaxSendMessageSize = 16 * 1024 * 1024;
+    options.MaxReceiveMessageSize        = 16 * 1024 * 1024; // 16 MB
+    options.MaxSendMessageSize           = 16 * 1024 * 1024;
+    // Compress gRPC responses when the client sends grpc-accept-encoding: gzip.
+    // All gRPC clients (Grpc.Net.Client, grpc-js, grpc-java) negotiate this automatically.
+    options.ResponseCompressionAlgorithm = "gzip";
+    options.ResponseCompressionLevel     = System.IO.Compression.CompressionLevel.Fastest;
 });
 
 builder.Services.AddGrpcReflection(); // enable grpcurl introspection in Development
@@ -331,6 +351,9 @@ app.UseForwardedHeaders(new ForwardedHeadersOptions
                      | ForwardedHeaders.XForwardedProto
                      | ForwardedHeaders.XForwardedHost
 });
+
+// Response compression must run before any middleware that writes the body.
+app.UseResponseCompression();
 
 // Static files — must precede endpoint mapping (only needed for Studio CSS/JS)
 if (studioEnabled)

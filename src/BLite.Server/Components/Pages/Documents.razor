@@ -203,7 +203,7 @@
             _editJson = await Studio.GetDocumentAsJsonAsync(DbId, Uri.UnescapeDataString(Collection), id) ?? "";
 
             if (_showEmbeddingPanel)
-                _embeddingText = Studio.BuildEmbeddingTextById(DbId, Uri.UnescapeDataString(Collection), id);
+                _embeddingText = await Studio.BuildEmbeddingTextById(DbId, Uri.UnescapeDataString(Collection), id);
         }
         catch (Exception ex) { _editorMessage = ex.Message; _editorError = true; }
         finally  { _loadingJson = false; }

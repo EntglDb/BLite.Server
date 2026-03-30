@@ -335,9 +335,9 @@ internal static class RestApiDocumentsExtensions
                     var k = body.K > 0 ? body.K : 10;
                     var efSearch = body.EfSearch > 0 ? body.EfSearch : 100;
 
-                    var results = col.VectorSearch(indexName, body.Vector, k, efSearch)
+                    var results = await col.VectorSearchAsync(indexName, body.Vector, k, efSearch)
                         .Select(doc => BsonJsonConverter.ToJson(doc, indented: false))
-                        .ToList();
+                        .ToListAsync(ct);
 
                     return Results.Ok(new { count = results.Count, documents = results });
                 }

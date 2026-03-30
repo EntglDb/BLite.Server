@@ -37,22 +37,13 @@ public sealed class RemoteDocumentCollection<TId, T> : IDocumentCollection<TId, 
 
     // ── Insert ────────────────────────────────────────────────────────────────
 
-    public TId Insert(T entity) =>
-        InsertAsync(entity).GetAwaiter().GetResult();
-
     public Task<TId> InsertAsync(T entity, CancellationToken ct = default) =>
         _inner.InsertAsync(entity, null, ct);
-
-    public List<TId> InsertBulk(IEnumerable<T> entities) =>
-        InsertBulkAsync(entities).GetAwaiter().GetResult();
 
     public async Task<List<TId>> InsertBulkAsync(IEnumerable<T> entities, CancellationToken ct = default) =>
         (await _inner.InsertBulkAsync(entities, null, ct)).ToList();
 
     // ── Read ──────────────────────────────────────────────────────────────────
-
-    public T? FindById(TId id) =>
-        FindByIdAsync(id).GetAwaiter().GetResult();
 
     public async ValueTask<T?> FindByIdAsync(TId id, CancellationToken ct = default) =>
         await _inner.FindByIdAsync(id, ct);
@@ -67,37 +58,21 @@ public sealed class RemoteDocumentCollection<TId, T> : IDocumentCollection<TId, 
 
     // ── Update ────────────────────────────────────────────────────────────────
 
-    public bool Update(T entity) =>
-        UpdateAsync(entity).GetAwaiter().GetResult();
-
     public Task<bool> UpdateAsync(T entity, CancellationToken ct = default) =>
         _inner.UpdateAsync(entity, null, ct);
-
-    public int UpdateBulk(IEnumerable<T> entities) =>
-        UpdateBulkAsync(entities).GetAwaiter().GetResult();
 
     public Task<int> UpdateBulkAsync(IEnumerable<T> entities, CancellationToken ct = default) =>
         _inner.UpdateBulkAsync(entities, null, ct);
 
     // ── Delete ────────────────────────────────────────────────────────────────
 
-    public bool Delete(TId id) =>
-        DeleteAsync(id).GetAwaiter().GetResult();
-
     public Task<bool> DeleteAsync(TId id, CancellationToken ct = default) =>
         _inner.DeleteAsync(id, null, ct);
-
-    public int DeleteBulk(IEnumerable<TId> ids) =>
-        DeleteBulkAsync(ids).GetAwaiter().GetResult();
 
     public Task<int> DeleteBulkAsync(IEnumerable<TId> ids, CancellationToken ct = default) =>
         _inner.DeleteBulkAsync(ids, null, ct);
 
     // ── Index management ──────────────────────────────────────────────────────
-
-    public ICollectionIndex<TId, T> CreateIndex<TKey>(
-        Expression<Func<T, TKey>> keySelector, string? name = null, bool unique = false) =>
-        CreateIndexAsync(keySelector, name, unique).GetAwaiter().GetResult();
 
     public async Task<ICollectionIndex<TId, T>> CreateIndexAsync<TKey>(
         Expression<Func<T, TKey>> keySelector, string? name = null, bool unique = false,
@@ -110,11 +85,6 @@ public sealed class RemoteDocumentCollection<TId, T> : IDocumentCollection<TId, 
         return new RemoteCollectionIndex<TId, T>(indexName, paths, IndexType.BTree, unique, QueryIndexAsync);
     }
 
-    public ICollectionIndex<TId, T> CreateVectorIndex<TKey>(
-        Expression<Func<T, TKey>> keySelector, int dimensions,
-        VectorMetric metric = VectorMetric.Cosine, string? name = null) =>
-        CreateVectorIndexAsync(keySelector, dimensions, metric, name).GetAwaiter().GetResult();
-
     public async Task<ICollectionIndex<TId, T>> CreateVectorIndexAsync<TKey>(
         Expression<Func<T, TKey>> keySelector, int dimensions,
         VectorMetric metric = VectorMetric.Cosine, string? name = null,
@@ -126,10 +96,6 @@ public sealed class RemoteDocumentCollection<TId, T> : IDocumentCollection<TId, 
         await _inner.CreateVectorIndexAsync(field, dimensions, metric.ToString(), indexName, ct);
         return new RemoteCollectionIndex<TId, T>(indexName, paths, IndexType.Vector, false, QueryIndexAsync, dimensions, metric, VectorSearchAsync);
     }
-
-    public ICollectionIndex<TId, T> EnsureIndex<TKey>(
-        Expression<Func<T, TKey>> keySelector, string? name = null, bool unique = false) =>
-        EnsureIndexAsync(keySelector, name, unique).GetAwaiter().GetResult();
 
     public async Task<ICollectionIndex<TId, T>> EnsureIndexAsync<TKey>(
         Expression<Func<T, TKey>> keySelector, string? name = null, bool unique = false,
@@ -147,18 +113,15 @@ public sealed class RemoteDocumentCollection<TId, T> : IDocumentCollection<TId, 
         return await CreateIndexAsync(keySelector, name, unique, ct);
     }
 
-    public bool DropIndex(string name) =>
-        DropIndexAsync(name).GetAwaiter().GetResult();
-
     public Task<bool> DropIndexAsync(string name, CancellationToken ct = default) =>
         _inner.DropIndexAsync(name, ct);
 
     public IEnumerable<CollectionIndexInfo> GetIndexes() =>
         ListIndexesAsync().GetAwaiter().GetResult();
 
-    public ICollectionIndex<TId, T>? GetIndex(string name)
+    public async Task<ICollectionIndex<TId, T>?> GetIndexAsync(string name)
     {
-        var all = ListIndexesAsync().GetAwaiter().GetResult();
+        var all = await ListIndexesAsync();
         var found = all.FirstOrDefault(i => i.Name == name);
         if (found is null) return null;
         var vsDelegate = found.Type == IndexType.Vector ? (Func<string, float[], int, int, CancellationToken, IAsyncEnumerable<T>>?)VectorSearchAsync : null;
@@ -225,8 +188,8 @@ public sealed class RemoteDocumentCollection<TId, T> : IDocumentCollection<TId, 
 
     // ── TimeSeries (not supported on remote) ─────────────────────────────────
 
-    public void ForcePrune() =>
-        _inner.ForcePruneAsync(default).GetAwaiter().GetResult();
+    public Task ForcePruneAsync() =>
+        _inner.ForcePruneAsync(default);
 
     // ── Change Data Capture ───────────────────────────────────────────────────
 

@@ -39,7 +39,7 @@ public static class QueryDescriptorExecutor
             if (btreeIdx is not null)
             {
                 var key = ScalarToObject(eq.Value);
-                source = SyncToAsync(collection.QueryIndex(btreeIdx.Name, key, key), ct);
+                source = SyncToAsync(collection.QueryIndexAsync(btreeIdx.Name, key, key), ct);
                 // predicate stays null — index equality scan is already exact
             }
             else
@@ -162,10 +162,10 @@ public static class QueryDescriptorExecutor
     };
 
     private static async IAsyncEnumerable<BsonDocument> SyncToAsync(
-        IEnumerable<BsonDocument> source,
+        IAsyncEnumerable<BsonDocument> source,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
-        foreach (var doc in source)
+        await foreach (var doc in source)
         {
             ct.ThrowIfCancellationRequested();
             yield return doc;

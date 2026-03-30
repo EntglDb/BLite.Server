@@ -38,8 +38,8 @@ public sealed class EmbeddingQueue : IEmbeddingQueue
         var key = BuildKey(databaseId, collection, documentId);
 
         // Find existing task with this key that's not done
-        var existing = col.FindAll()
-            .FirstOrDefault(doc =>
+        var existing = await col.FindAllAsync()
+            .FirstOrDefaultAsync(doc =>
             {
                 var docKey = doc.TryGetValue("key", out var kv) ? kv.AsString : "";
                 var docStatus = doc.TryGetValue("rawStatus", out var sv) ? sv.AsString : "todo";
@@ -82,7 +82,7 @@ public sealed class EmbeddingQueue : IEmbeddingQueue
         var opts = _options.CurrentValue;
 
         // Fetch all tasks and filter in-memory (simple for now)
-        var allTasks = col.FindAll().ToList();
+        var allTasks = await col.FindAllAsync().ToListAsync();
         var now = DateTime.UtcNow;
 
         var tasks = allTasks
@@ -129,7 +129,7 @@ public sealed class EmbeddingQueue : IEmbeddingQueue
 
         foreach (var taskId in taskIds)
         {
-            var doc = col.FindById(taskId);
+            var doc = await col.FindByIdAsync(taskId);
             if (doc != null)
             {
                 var updated = UpdateTaskStatus(doc, "done", engine);
@@ -142,13 +142,13 @@ public sealed class EmbeddingQueue : IEmbeddingQueue
         _logger.LogDebug("Completed {Count} embedding tasks", taskIds.Count);
     }
 
-    public Task<EmbeddingQueueStats> GetStatsAsync(CancellationToken ct = default)
+    public async Task<EmbeddingQueueStats> GetStatsAsync(CancellationToken ct = default)
     {
         var engine = _registry.SystemEngine;
         var col = engine.GetOrCreateCollection(QueueCollectionName);
         var opts = _options.CurrentValue;
 
-        var all = col.FindAll().ToList();
+        var all = await col.FindAllAsync().ToListAsync();
         int todo = 0, inProgress = 0, stale = 0, done = 0;
 
         foreach (var doc in all)
@@ -166,7 +166,7 @@ public sealed class EmbeddingQueue : IEmbeddingQueue
                 todo++;
         }
 
-        return Task.FromResult(new EmbeddingQueueStats(todo, inProgress, stale, done, all.Count));
+        return new EmbeddingQueueStats(todo, inProgress, stale, done, all.Count);
     }
 
     private static string BuildKey(string? databaseId, string collection, BsonId documentId)

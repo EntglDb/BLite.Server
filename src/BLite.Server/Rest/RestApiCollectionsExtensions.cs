@@ -359,7 +359,7 @@ internal static class RestApiCollectionsExtensions
 
         // POST /api/v1/{dbId}/{collection}/timeseries/prune
         group.MapPost("/{dbId}/{collection}/timeseries/prune",
-            (HttpContext ctx,
+            async (HttpContext ctx,
              EngineRegistry registry,
              string dbId,
              string collection) =>
@@ -375,8 +375,8 @@ internal static class RestApiCollectionsExtensions
                             title: "Bad Request",
                             detail: "ForcePrune is only valid on TimeSeries collections.",
                             statusCode: StatusCodes.Status400BadRequest);
-                    col.ForcePrune();
-                    engine.Commit();
+                    await col.ForcePruneAsync();
+                    await engine.CommitAsync();
                     return Results.NoContent();
                 }
                 catch (InvalidOperationException ex)

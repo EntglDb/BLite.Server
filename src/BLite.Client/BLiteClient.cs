@@ -57,7 +57,20 @@ public sealed class BLiteClient : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(options);
 
-        _channel     = GrpcChannel.ForAddress(options.ResolvedAddress);
+        _channel = GrpcChannel.ForAddress(options.ResolvedAddress, new GrpcChannelOptions
+        {
+            MaxReceiveMessageSize = 16 * 1024 * 1024,
+            MaxSendMessageSize    = 16 * 1024 * 1024,
+            // HTTP/2 keep-alive pings: prevent silent connection drops behind NAT/LB
+            // and enable the channel to detect dead servers before an actual call fails.
+            HttpHandler = new SocketsHttpHandler
+            {
+                EnableMultipleHttp2Connections = true,
+                KeepAlivePingDelay             = TimeSpan.FromSeconds(30),
+                KeepAlivePingTimeout           = TimeSpan.FromSeconds(10),
+                KeepAlivePingPolicy            = HttpKeepAlivePingPolicy.Always,
+            },
+        });
         _ownsChannel = true;
 
         // API key is sent as a custom header on every gRPC call.
