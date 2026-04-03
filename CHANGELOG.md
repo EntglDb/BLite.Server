@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="1.0.1"></a>
+## [1.0.1](https://www.github.com/EntglDb/BLite.Server/releases/tag/v1.0.1) (2026-04-03)
+
+### Bug Fixes
+
+* **benchmarks:** fix PS5 ErrorActionPreference with docker stderr ([09d6eb6](https://www.github.com/EntglDb/BLite.Server/commit/09d6eb649620250eb414ae0e8b3e36d66bc4760a))
+
 <a name="1.0.0"></a>
 ## [1.0.0](https://www.github.com/EntglDb/BLite.Server/releases/tag/v1.0.0) (2026-03-23)
 
