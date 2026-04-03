@@ -38,7 +38,7 @@
 
   <ItemGroup>
     <!-- gRPC client channel -->
-    <PackageReference Include="BLite" Version="3.8.1-preview.3" ExcludeAssets="analyzers" />
+    <PackageReference Include="BLite" Version="4.1.1" ExcludeAssets="analyzers" />
     <PackageReference Include="Grpc.Net.Client" Version="2.76.0" />
     <!-- QueryDescriptor wire serialization (same options as server) -->
     <PackageReference Include="MessagePack" Version="3.1.*" />

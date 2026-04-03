@@ -51,8 +51,11 @@ public sealed class RemoteDocumentCollection<TId, T> : IDocumentCollection<TId, 
     public IAsyncEnumerable<T> FindAllAsync(CancellationToken ct = default) =>
         _inner.FindAllAsync(ct);
 
-    public IAsyncEnumerable<T> FindAsync(Func<T, bool> predicate, CancellationToken ct = default) =>
-        _inner.FindAsync(predicate, ct);
+    public IAsyncEnumerable<T> FindAsync(Expression<Func<T, bool>> predicate, CancellationToken ct = default) =>
+        _inner.AsQueryable().Where(predicate).AsAsyncEnumerable();
+
+    public Task<T?> FindOneAsync(Expression<Func<T, bool>> predicate, CancellationToken ct = default) =>
+        _inner.AsQueryable().FirstOrDefaultAsync(predicate, ct);
 
     public IBLiteQueryable<T> AsQueryable() => _inner.AsQueryable();
 

@@ -75,10 +75,8 @@ public class CrudBenchmarks
     // Null when MongoDB is not reachable — Mongo benchmarks report errors instead of crashing.
     private MongoClient?                    _mongoClient;
     private IMongoCollection<MongoBsonDoc>? _mongoCol;   // default write concern (w:1, j:false)
-    private IMongoCollection<MongoBsonDoc>? _mongoColJ;  // journaled write concern (w:1, j:true)
     private MongoDB.Bson.ObjectId           _mongoSeedId;
     private MongoDB.Bson.ObjectId           _mongoWriteId;
-    private MongoDB.Bson.ObjectId           _mongoWriteIdJ;
     private bool                            _mongoAvailable;
 
     // ── Global setup / teardown ───────────────────────────────────────────────
@@ -162,13 +160,7 @@ public class CrudBenchmarks
         if (_mongoAvailable)
         {
             var db = _mongoClient!.GetDatabase(MongoDbName);
-            _mongoCol  = db.GetCollection<MongoBsonDoc>(CollectionName);
-            _mongoColJ = db.GetCollection<MongoBsonDoc>(CollectionName,
-                new MongoCollectionSettings
-                {
-                    // Equivalent durability to BLite WAL: every write is fsynced before ack.
-                    WriteConcern = WriteConcern.Acknowledged.With(journal: true)
-                });
+            _mongoCol = db.GetCollection<MongoBsonDoc>(CollectionName);
 
             // Index on "category" mirrors what a DBA would add for the query benchmark.
             await _mongoCol.Indexes.CreateOneAsync(
@@ -221,14 +213,6 @@ public class CrudBenchmarks
                             .GetAwaiter().GetResult();
     }
 
-    [IterationSetup(Targets = [nameof(UpdateOne_MongoJ), nameof(DeleteOne_MongoJ)])]
-    public void IterationSetup_MongoJ()
-    {
-        if (!_mongoAvailable) return;
-        _mongoWriteIdJ = InsertOneMongoJAsync($"write-{Guid.NewGuid():N}", "books", 1.0, 1)
-                             .GetAwaiter().GetResult();
-    }
-
     // ── Insert (single) ───────────────────────────────────────────────────────
 
     // InvocationCount=1: each call appends a document, so multiple invocations
@@ -245,13 +229,6 @@ public class CrudBenchmarks
     {
         ThrowIfMongoUnavailable();
         return _mongoCol!.InsertOneAsync(MakeMongoDoc("bench-insert", "electronics", 9.99, 100));
-    }
-
-    [BenchmarkCategory("Insert-1"), Benchmark(Description = "MongoDB j:true"), InvocationCount(1)]
-    public Task InsertOne_MongoJ()
-    {
-        ThrowIfMongoUnavailable();
-        return _mongoColJ!.InsertOneAsync(MakeMongoDoc("bench-insert", "electronics", 9.99, 100));
     }
 
     // ── Insert (bulk) ─────────────────────────────────────────────────────────
@@ -278,16 +255,6 @@ public class CrudBenchmarks
         await _mongoCol!.InsertManyAsync(docs);
     }
 
-    [BenchmarkCategory("InsertBulk"), Benchmark(Description = "MongoDB j:true"), InvocationCount(1)]
-    public async Task InsertBulk_MongoJ()
-    {
-        ThrowIfMongoUnavailable();
-        var docs = new List<MongoBsonDoc>(BulkSize);
-        for (int i = 0; i < BulkSize; i++)
-            docs.Add(MakeMongoDoc($"bulk-{i}", Categories[i % 5], i * 0.99, i));
-        await _mongoColJ!.InsertManyAsync(docs);
-    }
-
     // ── FindById ──────────────────────────────────────────────────────────────
 
     [BenchmarkCategory("FindById"), Benchmark(Baseline = true, Description = "BLite gRPC")]
@@ -300,37 +267,6 @@ public class CrudBenchmarks
         ThrowIfMongoUnavailable();
         var filter = Builders<MongoBsonDoc>.Filter.Eq("_id", _mongoSeedId);
         _ = await _mongoCol!.Find(filter).FirstOrDefaultAsync();
-    }
-
-    // ── Query (server-side category filter, top 100) ──────────────────────────
-
-    [BenchmarkCategory("Query"), Benchmark(Baseline = true, Description = "BLite gRPC")]
-    public async Task<int> QueryByCategory_BLite()
-    {
-        var descriptor = new QueryDescriptor
-        {
-            Collection = _bliteCol.Name,
-            Where = new BinaryFilter
-            {
-                Field = "category",
-                Op    = FilterOp.Eq,
-                Value = ScalarValue.From("electronics")
-            },
-            Take = 100
-        };
-        int count = 0;
-        await foreach (var _ in _bliteCol.QueryAsync(descriptor))
-            count++;
-        return count;
-    }
-
-    [BenchmarkCategory("Query"), Benchmark(Description = "MongoDB")]
-    public async Task<int> QueryByCategory_Mongo()
-    {
-        ThrowIfMongoUnavailable();
-        var filter = Builders<MongoBsonDoc>.Filter.Eq("category", "electronics");
-        var docs   = await _mongoCol!.Find(filter).Limit(100).ToListAsync();
-        return docs.Count;
     }
 
     // ── Update (single) ───────────────────────────────────────────────────────
@@ -354,18 +290,6 @@ public class CrudBenchmarks
         return _mongoCol!.UpdateOneAsync(filter, update);
     }
 
-    [BenchmarkCategory("Update-1"), Benchmark(Description = "MongoDB j:true")]
-    public Task UpdateOne_MongoJ()
-    {
-        ThrowIfMongoUnavailable();
-        var filter = Builders<MongoBsonDoc>.Filter.Eq("_id", _mongoWriteIdJ);
-        var update = Builders<MongoBsonDoc>.Update
-            .Set("name",  "updated-name")
-            .Set("price", 1.99)
-            .Set("stock", 0);
-        return _mongoColJ!.UpdateOneAsync(filter, update);
-    }
-
     // ── Delete (single) ───────────────────────────────────────────────────────
 
     [BenchmarkCategory("Delete-1"), Benchmark(Baseline = true, Description = "BLite gRPC")]
@@ -378,14 +302,6 @@ public class CrudBenchmarks
         ThrowIfMongoUnavailable();
         var filter = Builders<MongoBsonDoc>.Filter.Eq("_id", _mongoWriteId);
         return _mongoCol!.DeleteOneAsync(filter);
-    }
-
-    [BenchmarkCategory("Delete-1"), Benchmark(Description = "MongoDB j:true")]
-    public Task DeleteOne_MongoJ()
-    {
-        ThrowIfMongoUnavailable();
-        var filter = Builders<MongoBsonDoc>.Filter.Eq("_id", _mongoWriteIdJ);
-        return _mongoColJ!.DeleteOneAsync(filter);
     }
 
     // ── Private helpers ───────────────────────────────────────────────────────
@@ -423,14 +339,6 @@ public class CrudBenchmarks
     {
         var doc = MakeMongoDoc(name, category, price, stock);
         await _mongoCol!.InsertOneAsync(doc);
-        return doc["_id"].AsObjectId;
-    }
-
-    private async Task<MongoDB.Bson.ObjectId> InsertOneMongoJAsync(
-        string name, string category, double price, int stock)
-    {
-        var doc = MakeMongoDoc(name, category, price, stock);
-        await _mongoColJ!.InsertOneAsync(doc);
         return doc["_id"].AsObjectId;
     }
 

@@ -7,13 +7,13 @@
 #   - .NET 10 SDK installed
 #
 # Usage:
-#   .\run-benchmarks.ps1                              — run CrudBenchmarks (default)
-#   .\run-benchmarks.ps1 -BdnArgs "--filter","*"      — run all benchmark classes
+#   .\run-benchmarks.ps1                              — run CrudBenchmarks + QueryBenchmarks (default)
+#   .\run-benchmarks.ps1 -BdnArgs "--filter","*Crud*" — run only CrudBenchmarks
 #   .\run-benchmarks.ps1 -SkipBuild                   — reuse cached Docker image
 #   .\run-benchmarks.ps1 -SkipDocker                  — skip Docker; use already-running services
 
 param(
-    [string[]] $BdnArgs    = @("--filter", "*CrudBenchmarks*"),
+    [string[]] $BdnArgs    = @("--filter", "*Benchmarks*"),
     [switch]   $SkipBuild,
     [switch]   $SkipDocker
 )
