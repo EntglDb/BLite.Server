@@ -32,6 +32,9 @@ public static class RestApiExtensions
         api.MapBlql();
         api.MapUsers();
         api.MapKv();
+        api.MapGdpr();
+        api.MapMetrics();
+        api.MapVacuum();
     }
 
     // ── Utility helpers ────────────────────────────────────────────────────────

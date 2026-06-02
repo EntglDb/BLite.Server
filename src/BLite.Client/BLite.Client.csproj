@@ -9,9 +9,9 @@
     <RootNamespace>BLite.Client</RootNamespace>
     <AssemblyName>BLite.Client</AssemblyName>
 
-    <Version>1.0.1</Version>
-    <AssemblyVersion>0.1.4.0</AssemblyVersion>
-    <FileVersion>0.1.4.0</FileVersion>
+    <Version>2.0.0</Version>
+    <AssemblyVersion>2.0.0.0</AssemblyVersion>
+    <FileVersion>2.0.0.0</FileVersion>
     <Authors>BLite Team</Authors>
     <Company>EntglDb</Company>
     <Copyright>Copyright © 2026 Luca Fabbri</Copyright>
@@ -38,7 +38,7 @@
 
   <ItemGroup>
     <!-- gRPC client channel -->
-    <PackageReference Include="BLite" Version="4.1.1" ExcludeAssets="analyzers" />
+    <PackageReference Include="BLite" Version="5.0.0" ExcludeAssets="analyzers" />
     <PackageReference Include="Grpc.Net.Client" Version="2.76.0" />
     <!-- QueryDescriptor wire serialization (same options as server) -->
     <PackageReference Include="MessagePack" Version="3.1.*" />

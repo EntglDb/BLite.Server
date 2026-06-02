@@ -1,0 +1,216 @@
+@page "/gdpr"
+@page "/gdpr/{DatabaseId}"
+@inject StudioService Studio
+@inject IJSRuntime JS
+
+<h1>🛡️ GDPR</h1>
+
+<div class="toolbar">
+    <label class="toolbar-label">Database:</label>
+    <select class="input" @onchange="OnDatabaseChanged">
+        <option value="">(default / system)</option>
+        @foreach (var t in _tenants)
+        {
+            <option value="@t.DatabaseId" selected="@(t.DatabaseId == DatabaseId)">@t.DatabaseId</option>
+        }
+    </select>
+    <button class="btn btn-primary" @onclick="LoadInspection">Inspect</button>
+    <button class="btn" @onclick="RunVacuum" disabled="@_vacuumRunning">
+        @if (_vacuumRunning) { <span>Running…</span> } else { <span>🗑️ Vacuum</span> }
+    </button>
+</div>
+
+@if (!string.IsNullOrEmpty(_message))
+{
+    <div class="alert @(_isError ? "alert-error" : "alert-ok")">@_message</div>
+}
+
+@* ── Inspection report ───────────────────────────────────────────────────── *@
+@if (_report is not null)
+{
+    <details class="panel" open>
+        <summary class="panel-title">📋 Inspection Report (Art. 30)</summary>
+        <div class="panel-body">
+            <table class="data-table" style="max-width:480px">
+                <tbody>
+                    <tr><td>Encrypted</td>
+                        <td><span class="badge @(_report.IsEncrypted ? "badge-active" : "badge-idle")">
+                            @(_report.IsEncrypted ? "AES-256-GCM ✓" : "Not encrypted")
+                        </span></td></tr>
+                    <tr><td>Audit sink</td>
+                        <td><span class="badge @(_report.IsAuditEnabled ? "badge-active" : "badge-idle")">
+                            @(_report.IsAuditEnabled ? "Active ✓" : "Not configured")
+                        </span></td></tr>
+                    <tr><td>Layout</td>
+                        <td>@(_report.IsMultiFileMode ? "Multi-file" : "Single-file")</td></tr>
+                    <tr><td>Path</td>
+                        <td class="mono" style="font-size:0.8em">@_report.DatabasePath</td></tr>
+                </tbody>
+            </table>
+
+            @if (_report.Collections.Count > 0)
+            {
+                <h3 style="margin-top:1.2rem">Collections</h3>
+                <div class="table-scroll">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Collection</th>
+                                <th>Documents</th>
+                                <th>Storage (KB)</th>
+                                <th>Personal data fields</th>
+                                <th>Retention</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var col in _report.Collections)
+                            {
+                                <tr>
+                                    <td class="mono">@col.Name</td>
+                                    <td>@col.DocumentCount</td>
+                                    <td>@(col.StorageSizeBytes / 1024)</td>
+                                    <td>
+                                        @if (col.PersonalDataFields.Count > 0)
+                                        {
+                                            <span class="badge badge-active">@string.Join(", ", col.PersonalDataFields)</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="text-dim">—</span>
+                                        }
+                                    </td>
+                                    <td>
+                                        @if (col.RetentionPolicy is not null)
+                                        {
+                                            @if (col.RetentionPolicy.MaxAge is { } age)
+                                            {
+                                                <span>@age.Days d</span>
+                                            }
+                                            else if (col.RetentionPolicy.MaxDocumentCount is { } max)
+                                            {
+                                                <span>max @max docs</span>
+                                            }
+                                        }
+                                        else
+                                        {
+                                            <span class="text-dim">—</span>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </div>
+    </details>
+}
+
+@* ── Subject export ──────────────────────────────────────────────────────── *@
+<details class="panel">
+    <summary class="panel-title">📤 Subject Data Export (Art. 15 / 20)</summary>
+    <div class="panel-body">
+        <div class="toolbar">
+            <label class="toolbar-label">Field name:</label>
+            <input @bind="_exportField" placeholder="e.g. email" class="input" style="min-width:180px" />
+            <label class="toolbar-label">Field value:</label>
+            <input @bind="_exportValue" placeholder="e.g. alice@example.com" class="input" style="min-width:240px" />
+            <button class="btn btn-primary"
+                    @onclick="ExportSubject"
+                    disabled="@(string.IsNullOrWhiteSpace(_exportField) || string.IsNullOrWhiteSpace(_exportValue) || _exportRunning)">
+                @if (_exportRunning) { <span>Exporting…</span> } else { <span>Export JSON</span> }
+            </button>
+        </div>
+        <p class="text-dim" style="margin-top:8px;font-size:0.85em">
+            Searches all collections in the selected database for documents where
+            <strong>@_exportField</strong> equals <strong>@_exportValue</strong>
+            and downloads a portable JSON report.
+        </p>
+    </div>
+</details>
+
+@code {
+    [Parameter] public string? DatabaseId { get; set; }
+
+    private IReadOnlyList<TenantEntry> _tenants = [];
+    private BLite.Core.GDPR.DatabaseInspectionReport? _report;
+
+    private string _message = "";
+    private bool   _isError;
+    private bool   _vacuumRunning;
+
+    private string _exportField   = "";
+    private string _exportValue   = "";
+    private bool   _exportRunning;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _tenants = Studio.ListTenants();
+        await LoadInspection();
+    }
+
+    private async Task OnDatabaseChanged(ChangeEventArgs e)
+    {
+        DatabaseId = e.Value?.ToString() ?? "";
+        _report    = null;
+        _message   = "";
+        await LoadInspection();
+    }
+
+    private Task LoadInspection()
+    {
+        _message = "";
+        _isError = false;
+        try
+        {
+            var dbId = string.IsNullOrEmpty(DatabaseId) ? null : DatabaseId;
+            _report = Studio.InspectDatabase(dbId);
+        }
+        catch (Exception ex)
+        {
+            _isError = true;
+            _message = ex.Message;
+        }
+        return Task.CompletedTask;
+    }
+
+    private async Task RunVacuum()
+    {
+        _message       = "";
+        _isError       = false;
+        _vacuumRunning = true;
+        try
+        {
+            var dbId = string.IsNullOrEmpty(DatabaseId) ? null : DatabaseId;
+            await Studio.VacuumAsync(dbId);
+            _message = "Vacuum completed. Free space reclaimed.";
+        }
+        catch (Exception ex)
+        {
+            _isError = true;
+            _message = ex.Message;
+        }
+        finally { _vacuumRunning = false; }
+    }
+
+    private async Task ExportSubject()
+    {
+        _message       = "";
+        _isError       = false;
+        _exportRunning = true;
+        try
+        {
+            var dbId = string.IsNullOrEmpty(DatabaseId) ? null : DatabaseId;
+            var (bytes, fileName) = await Studio.ExportSubjectDataAsync(dbId, _exportField, _exportValue);
+            var b64 = Convert.ToBase64String(bytes);
+            await JS.InvokeVoidAsync("studioDownload.saveAs", fileName, "application/json", b64);
+            _message = $"Exported {bytes.Length:N0} bytes to {fileName}.";
+        }
+        catch (Exception ex)
+        {
+            _isError = true;
+            _message = ex.Message;
+        }
+        finally { _exportRunning = false; }
+    }
+}

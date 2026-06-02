@@ -409,6 +409,48 @@ public sealed class StudioService
         return ok;
     }
 
+    // ── GDPR ──────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Returns the Art. 30 database inspection report for a given engine.
+    /// </summary>
+    public BLite.Core.GDPR.DatabaseInspectionReport InspectDatabase(string? databaseId)
+    {
+        var engine = _registry.GetEngine(databaseId);
+        return BLite.Core.GDPR.GdprEngineExtensions.InspectDatabase(engine);
+    }
+
+    /// <summary>
+    /// Runs VACUUM on a tenant engine to compact the database and reclaim free space.
+    /// </summary>
+    public async Task VacuumAsync(string? databaseId, CancellationToken ct = default)
+    {
+        var engine = _registry.GetEngine(databaseId);
+        await engine.VacuumAsync(ct: ct);
+    }
+
+    /// <summary>
+    /// Exports subject data for a given field/value pair as a JSON byte array.
+    /// Returns the raw JSON bytes and a suggested filename.
+    /// </summary>
+    public async Task<(byte[] Json, string FileName)> ExportSubjectDataAsync(
+        string? databaseId, string fieldName, string fieldValue,
+        CancellationToken ct = default)
+    {
+        var engine = _registry.GetEngine(databaseId);
+        var query = new BLite.Core.GDPR.SubjectQuery
+        {
+            FieldName  = fieldName,
+            FieldValue = BLite.Bson.BsonValue.FromString(fieldValue),
+            Format     = BLite.Core.GDPR.SubjectExportFormat.Json
+        };
+        await using var report = await BLite.Core.GDPR.GdprEngineExtensions.ExportSubjectDataAsync(engine, query, ct);
+        var ms = new MemoryStream();
+        await report.ExportAsJsonAsync(ms, ct);
+        var label = (databaseId ?? "system").Trim().ToLowerInvariant();
+        return (ms.ToArray(), $"subject-export-{label}-{fieldValue}-{DateTime.UtcNow:yyyyMMdd}.json");
+    }
+
     // ── BLQL query ────────────────────────────────────────────────────────────
 
     /// <summary>

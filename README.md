@@ -2,8 +2,10 @@
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen)](https://github.com/EntglDb/BLite.Server)
+[![Version](https://img.shields.io/badge/version-2.0.0-blue)](https://github.com/EntglDb/BLite.Server/releases)
+[![BLite Engine](https://img.shields.io/badge/BLite%20engine-5.0.0-brightgreen)](https://github.com/EntglDb/BLite)
 
-**BLite Server** is a high-performance, self-hosted database server built on top of the [BLite](https://github.com/EntglDb/BLite) embedded engine.  
+**BLite Server 2.0.0** is a high-performance, self-hosted database server built on top of the [BLite 5.0.0](https://github.com/EntglDb/BLite) embedded engine.  
 It exposes BLite's full capabilities over three interfaces — a **gRPC** endpoint for the .NET SDK, a **REST API** for cross-language access, and a **Blazor Studio** web UI for administration — all hosted on **ASP.NET Core / Kestrel**.
 
 ---
@@ -141,6 +143,22 @@ All write RPCs accept an optional `transaction_id` field.
 
 ---
 
+## BLite 5.0.0 — New Features
+
+BLite Server 2.0.0 runs on **BLite 5.0.0** and exposes the following new engine capabilities:
+
+| Feature | Engine API | Server exposure |
+|---|---|---|
+| **AES-256-GCM encryption at rest** | `CryptoOptions` on engine builder | Reported in GDPR inspection; transparent to clients |
+| **Audit Trail** | `IBLiteAuditSink`, `BLiteMetrics` | `/metrics` REST endpoint; engine-level metrics |
+| **GDPR primitives** | `GdprEngineExtensions`, `SubjectQuery`, `[PersonalData]` | `/gdpr/inspect`, `/gdpr/export-subject` REST + Studio GDPR page |
+| **Generalized Retention Policy** | `HasRetentionPolicy` on any typed collection | Reported in GDPR inspection per-collection |
+| **Secure Erase** | `HasSecureErase` — zero-overwrites on delete | Transparent to clients |
+| **Multi-Process WAL** | `PageFileConfig.EnableMultiProcessAccess` | Configured per engine at startup |
+| **VacuumAsync** | `engine.VacuumAsync()` | `POST /{dbId}/vacuum` REST endpoint + Studio GDPR page |
+
+---
+
 ## REST API
 
 Base path: `/api/v1`. All endpoints require `x-api-key` or `Authorization: Bearer <key>`.  
@@ -210,6 +228,28 @@ Interactive docs available at `/scalar` when Studio is enabled.
 | `POST` | `/users` | Create a user |
 | `DELETE` | `/users/{username}` | Delete a user |
 | `PUT` | `/users/{username}/permissions` | Replace user permissions |
+
+### GDPR (requires `Admin` permission)
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/{dbId}/gdpr/inspect` | Art. 30 inspection report: encryption, audit, per-collection personal-data fields, retention policies |
+| `POST` | `/{dbId}/{collection}/gdpr/export-subject` | Export all documents matching a field/value pair as a JSON file (Art. 15/20) |
+
+Body for export-subject: `{ "fieldName": "email", "fieldValue": "alice@example.com" }`
+
+### Metrics (requires `Admin` permission)
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/metrics` | Aggregate metrics across all active engines (read/write/delete counts, sizes) |
+| `GET` | `/{dbId}/metrics` | Metrics for a specific tenant database |
+
+### Vacuum (requires `Admin` permission)
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/{dbId}/vacuum` | Compact the database file and reclaim free pages |
 
 ---
 
@@ -286,6 +326,7 @@ Studio pages:
 | Documents | `/documents/{name}` | Browse, edit, delete documents; BLQL query |
 | Key-Value | `/kv` | Browse keys, set/edit/delete entries, purge expired |
 | Embedding | `/embedding` | Load ONNX model, test embeddings, cosine-similarity sandbox |
+| **GDPR** | `/gdpr` | Art. 30 inspection (encryption, audit, personal-data fields, retention), subject export (Art. 15/20), Vacuum |
 
 First startup navigates to `/setup` to create the `root` admin user.
 
