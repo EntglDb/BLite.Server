@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -C /Users/FABLUA/Documents/GitHub/BLite status)",
+      "Bash(git -C /Users/FABLUA/Documents/GitHub/BLite.Website status)",
+      "Bash(git -C /Users/FABLUA/Documents/GitHub/BLite.Website log --oneline -3)",
+      "Bash(git -C /Users/FABLUA/Documents/GitHub/BLite log --oneline -3)",
+      "Bash(git -C /Users/FABLUA/Documents/GitHub/BLite add src/BLite/BLite.csproj src/BLite.Core/BLite.Core.csproj src/BLite.Bson/BLite.Bson.csproj src/BLite.Caching/BLite.Caching.csproj src/BLite.SourceGenerators/BLite.SourceGenerators.csproj src/BLite.Wasm/BLite.Wasm.csproj tools/BLite.Studio/BLite.Studio.csproj tools/BLite.Studio/Views/MainWindow.axaml)",
+      "Bash(git -C /Users/FABLUA/Documents/GitHub/BLite commit -m ' *)",
+      "Bash(git -C /Users/FABLUA/Documents/GitHub/BLite push origin v5.0.2 studio-v5.0.2)"
+    ]
+  }
+}
